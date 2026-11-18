@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     configured: Boolean(creds.apiKey),
     source: creds.apiKey ? "env" : "none",
-    model: creds.model,
+    model: "NOCAI Core",
   });
 }
 
@@ -174,7 +174,7 @@ export async function POST(req: NextRequest) {
       ];
 
       const geminiRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+        `${process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com"}/v1beta/models/${encodeURIComponent(
           creds.model
         )}:generateContent?key=${encodeURIComponent(creds.apiKey)}`,
         {
@@ -197,7 +197,7 @@ export async function POST(req: NextRequest) {
       if (!geminiRes.ok) {
         const errPayload = await geminiRes.json().catch(() => ({}));
         const errMsg =
-          errPayload?.error?.message || `Gemini API HTTP ${geminiRes.status}`;
+          errPayload?.error?.message || `NOCAI engine HTTP ${geminiRes.status}`;
         return NextResponse.json(
           {
             ok: false,
@@ -231,7 +231,8 @@ export async function POST(req: NextRequest) {
         .replace(/\s*```$/i, "");
 
       try {
-        parsed = JSON.parse(cleanedRaw);
+        const jsonSlice = cleanedRaw.match(/\\{[\\s\\S]*\\}/);
+        parsed = JSON.parse(jsonSlice ? jsonSlice[0] : cleanedRaw);
       } catch {
         // Recover partial JSON fields cleanly so raw JSON braces never leak into chat UI
         const titleMatch = cleanedRaw.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/);
@@ -239,7 +240,7 @@ export async function POST(req: NextRequest) {
         const unescapeJsonStr = (s: string) =>
           s.replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
         parsed = {
-          title: titleMatch ? unescapeJsonStr(titleMatch[1]) : `NOCAI Diagnostic (${creds.model})`,
+          title: titleMatch ? unescapeJsonStr(titleMatch[1]) : "NOCAI Diagnostic",
           content: contentMatch
             ? unescapeJsonStr(contentMatch[1])
             : cleanedRaw || "Respons diterima dari NOCAI.",
@@ -255,10 +256,10 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.json({
         ok: true,
-        provider: "gemini",
-        model: creds.model,
+        provider: "nocai",
+        model: "NOCAI Core",
         reply: {
-          title: parsed.title || `NOCAI Gemini · ${creds.model}`,
+          title: parsed.title || "NOCAI Diagnostic",
           content: parsed.content || rawText,
           cliSnippet: parsed.cliSnippet || undefined,
           metrics: Array.isArray(parsed.metrics) ? parsed.metrics.slice(0, 4) : undefined,

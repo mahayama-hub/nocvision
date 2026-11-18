@@ -39,6 +39,17 @@ const ACTION_PERMISSION_MAP: Record<string, PermissionKey> = {
   delete_bgp_peer: "manage_devices",
 };
 
+function maskSecrets(state: unknown) {
+  const s = state as { devices?: Array<Record<string, unknown>> } & Record<string, unknown>;
+  const devices = (s.devices || []).map((d) => {
+    const copy: Record<string, unknown> = { ...d };
+    copy.hasSshCredential = Boolean(copy.sshPassword);
+    delete copy.sshPassword;
+    return copy;
+  });
+  return { ...s, devices };
+}
+
 export async function GET(req: NextRequest) {
   const auth = requireSessionUser(req, "view_dashboard");
   if (auth.response) return auth.response;
@@ -57,11 +68,11 @@ export async function GET(req: NextRequest) {
       );
     }
     const updated = await refreshNocTelemetry(realPing);
-    return NextResponse.json(updated);
+    return NextResponse.json(maskSecrets(updated));
   }
 
   const state = loadNocState();
-  return NextResponse.json(state);
+  return NextResponse.json(maskSecrets(state));
 }
 
 export async function POST(req: NextRequest) {
@@ -162,6 +173,8 @@ export async function POST(req: NextRequest) {
         snmpCommunity: (body.snmpCommunity as string) || "public",
         snmpPort: Number(body.snmpPort) || profile.defaultPorts.snmp,
         sshPort: Number(body.sshPort) || profile.defaultPorts.ssh,
+        sshUser: (body.sshUser as string)?.trim() || undefined,
+        sshPassword: (body.sshPassword as string) || undefined,
         apiPort: Number(body.apiPort) || profile.defaultPorts.api,
         uptime: status === "offline" ? "0d 00h 00m" : realUptime,
         cpuUsage: 0,
@@ -245,8 +258,16 @@ export async function POST(req: NextRequest) {
         (l) => l.sourceId !== deviceId && l.targetId !== deviceId
       );
       state.onus = state.onus.filter((o) => o.oltId !== deviceId);
+      state.bgpPeers = state.bgpPeers.filter((p) => p.deviceId !== deviceId);
+      state.incidents = state.incidents.filter((i) => i.deviceId !== deviceId);
+      state.configSnapshots = (state.configSnapshots ?? []).filter(
+        (s) => s.deviceId !== deviceId
+      );
+      state.routeFilters = (state.routeFilters ?? []).filter(
+        (f) => f.deviceId !== deviceId
+      );
       saveNocState(state);
-      return NextResponse.json({ ok: true, state });
+      return NextResponse.json({ ok: true, state: maskSecrets(state) });
     }
 
     if (action === "poll_device") {

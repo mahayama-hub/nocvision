@@ -560,7 +560,7 @@ export default function NocVisionDashboard() {
     {
       id: "super_ai",
       label: "NOCAI",
-      subLabel: "AI Chat & Gemini Engine",
+      subLabel: "AI Chat & NOCAI Engine",
       icon: Sparkles,
       group: "DIAGNOSTIK & AI",
       hasDot: true,
@@ -1039,6 +1039,7 @@ export default function NocVisionDashboard() {
             links={links}
             selectedDeviceId={selectedDeviceId}
             onSelectDevice={(dev) => setSelectedDeviceId(dev.id)}
+            bgpPeers={bgpPeers}
           />
         )}
 
@@ -1508,8 +1509,7 @@ export default function NocVisionDashboard() {
                     <th className="py-2.5 px-3">Remote ASN &amp; IP</th>
                     <th className="py-2.5 px-3">Tipe Peer</th>
                     <th className="py-2.5 px-3">BGP State</th>
-                    <th className="py-2.5 px-3">Prefixes (Rx / Tx)</th>
-                    <th className="py-2.5 px-3">Traffic &amp; Latency</th>
+                    <th className="py-2.5 px-3">Prefix Count</th>
                     <th className="py-2.5 px-3">Session Uptime</th>
                   </tr>
                 </thead>
@@ -1568,20 +1568,7 @@ export default function NocVisionDashboard() {
                         </td>
                         <td className="py-3 px-3">
                           <span className="text-emerald-500">
-                            {peer.prefixesReceived.toLocaleString()} Rx
-                          </span>{" "}
-                          /{" "}
-                          <span className="text-sky-500">
-                            {peer.prefixesAdvertised} Tx
-                          </span>
-                        </td>
-                        <td className="py-3 px-3">
-                          <span className={`${pageHeading} block`}>
-                            &darr;{(peer.rxMbps / 1000).toFixed(2)}G &uarr;
-                            {(peer.txMbps / 1000).toFixed(2)}G
-                          </span>
-                          <span className={`text-[11px] ${pageMuted}`}>
-                            RTT: {peer.latencyMs} ms
+                            {peer.prefixesReceived.toLocaleString()}
                           </span>
                         </td>
                         <td className={`py-3 px-3 ${isLightCard ? "text-slate-600" : "text-slate-300"}`}>

@@ -459,7 +459,11 @@ export default function DeviceGraphsCenter({
                     : "0 Mbps";
                   const sfpTag =
                     typeof iface.rxPowerDbm === "number"
-                      ? ` | SFP ${iface.rxPowerDbm} dBm`
+                      ? ` | SFP Rx ${iface.rxPowerDbm} dBm${
+                          typeof iface.txPowerDbm === "number"
+                            ? ` / Tx ${iface.txPowerDbm} dBm`
+                            : ""
+                        }`
                       : "";
                   return (
                     <option key={iface.id} value={iface.id}>

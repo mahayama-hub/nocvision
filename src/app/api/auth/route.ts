@@ -52,10 +52,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const clientIp =
+    const rawClientIp =
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
       req.headers.get("x-real-ip")?.trim() ||
       "local";
+    const clientIp = rawClientIp
+      .replace(/^::ffff:/, "")
+      .replace(/^::1$/, "127.0.0.1");
     const userAgent = req.headers.get("user-agent") || "unknown";
     const rateKey = `${clientIp}:${username.toLowerCase()}`;
     const rateIp = checkLoginRateLimit(clientIp);

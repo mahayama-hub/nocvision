@@ -55,6 +55,8 @@ export default function AddDeviceModal({
   const [location, setLocation] = useState("POP Utama - Rack A1");
   const [snmpCommunity, setSnmpCommunity] = useState("public");
   const [sshPort, setSshPort] = useState(22);
+  const [sshUser, setSshUser] = useState("");
+  const [sshPassword, setSshPassword] = useState("");
   const [pollingMode, setPollingMode] = useState<
     "hybrid" | "live_icmp_tcp" | "simulation"
   >("live_icmp_tcp");
@@ -106,6 +108,8 @@ export default function AddDeviceModal({
         location,
         snmpCommunity,
         sshPort,
+        sshUser: sshUser.trim() || undefined,
+        sshPassword: sshPassword || undefined,
         pollingMode,
         testNow,
       });
@@ -211,6 +215,35 @@ export default function AddDeviceModal({
                 placeholder={`Contoh: OLT-05-${vendor.toUpperCase()}-UTARA`}
                 className={inputCls}
                 required
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            <div>
+              <label className={labelCls}>
+                SSH / API User (read-only)
+              </label>
+              <input
+                type="text"
+                autoComplete="off"
+                value={sshUser}
+                onChange={(e) => setSshUser(e.target.value)}
+                placeholder="mis. nocviewer"
+                className={`${inputCls} font-mono`}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>
+                SSH Password
+              </label>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={sshPassword}
+                onChange={(e) => setSshPassword(e.target.value)}
+                placeholder="disimpan di server, tidak dikirim balik ke browser"
+                className={`${inputCls} font-mono`}
               />
             </div>
           </div>

@@ -133,6 +133,8 @@ export interface NetworkDevice {
   snmpCommunity?: string;
   snmpPort?: number;
   sshPort?: number;
+  sshUser?: string;
+  sshPassword?: string;
   apiPort?: number;
   uptime: string;
   cpuUsage: number; // %
@@ -296,11 +298,13 @@ export interface AlertingConfig {
   telegramEnabled: boolean;
   telegramBotToken: string;
   telegramChatId: string;
+  telegramBotName?: string;
   whatsappEnabled: boolean;
   whatsappProvider: WhatsAppBotProvider;
   whatsappApiUrl: string;
   whatsappToken: string;
   whatsappTarget: string;
+  whatsappBotName?: string;
   notifyOnCritical: boolean;
   notifyOnOffline: boolean;
   notifyOnWarning: boolean;
@@ -315,12 +319,14 @@ export interface AlertingConfigPublic {
   hasTelegramToken: boolean;
   telegramTokenMasked: string;
   telegramChatId: string;
+  telegramBotName?: string;
   whatsappEnabled: boolean;
   whatsappProvider: WhatsAppBotProvider;
   whatsappApiUrl: string;
   hasWhatsappToken: boolean;
   whatsappTokenMasked: string;
   whatsappTarget: string;
+  whatsappBotName?: string;
   notifyOnCritical: boolean;
   notifyOnOffline: boolean;
   notifyOnWarning: boolean;

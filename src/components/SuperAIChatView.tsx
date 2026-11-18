@@ -630,7 +630,7 @@ export default function SuperAIChatView({
               }
             : undefined,
           reportMarkdown: localFallback?.reportMarkdown,
-          providerTag: `Gemini · ${data.model}`,
+          providerTag: "NOCAI Engine",
           timestamp: formatTime(),
         };
         setSessions((prev) =>
@@ -648,7 +648,7 @@ export default function SuperAIChatView({
       const noticeText =
         data.reason === "GEMINI_API_KEY_NOT_CONFIGURED"
           ? "GEMINI_API_KEY belum diset di environment (.env.local) — menggunakan Telemetry Engine lokal."
-          : `Fallback lokal aktif (${data.error || "Gemini API tidak terjangkau"}).`;
+          : `Fallback lokal aktif (${data.error || "NOCAI engine tidak terjangkau"}).`;
       const aiMsg: ChatMessage = {
         id: `msg-a-${Date.now()}`,
         role: "assistant",
@@ -1089,7 +1089,7 @@ export default function SuperAIChatView({
                         {msg.role === "assistant" && msg.providerTag && (
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                              msg.providerTag.startsWith("Gemini")
+                              msg.providerTag.startsWith("NOCAI")
                                 ? "bg-emerald-500/15 text-emerald-500 border border-emerald-500/30"
                                 : "bg-slate-500/15 text-slate-400 border border-slate-500/20"
                             }`}

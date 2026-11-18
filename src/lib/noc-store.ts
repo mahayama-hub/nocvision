@@ -15,7 +15,7 @@ import {
   TopologyLink,
   TrafficPoint,
 } from "./types";
-import { pollDeviceRealtime, probeSnmpBgpPeers, probeSnmpInterfaces } from "./network-poller";
+import { fetchRouterOsBgpPrefixes, pollDeviceRealtime, probeSnmpBgpPeers, probeSnmpInterfaces, probeTopTalker } from "./network-poller";
 import { dispatchNocAlert, reportCyberThreat } from "./alerting";
 
 export interface NocState {
@@ -254,6 +254,28 @@ export async function refreshNocTelemetry(forceRealPing = false): Promise<NocSta
                   .map((p) => [p.peerIp, p.state])
               );
               await syncBgpPeersForDevice(state, dev);
+              // prefix count asli via SSH (BGP4-MIB tidak menyediakannya)
+              if (dev.sshUser && dev.sshPassword) {
+                try {
+                  const prefixes = await fetchRouterOsBgpPrefixes({
+                    host: dev.ipAddress,
+                    port: dev.sshPort || 22,
+                    user: dev.sshUser,
+                    password: dev.sshPassword,
+                  });
+                  for (const item of prefixes) {
+                    const peer = state.bgpPeers.find(
+                      (p) => p.deviceId === dev.id && p.peerIp === item.peerIp
+                    );
+                    if (peer) {
+                      peer.prefixesReceived = item.received;
+                      peer.prefixesAdvertised = item.advertised;
+                    }
+                  }
+                } catch {
+                  // SSH tidak tersedia / kredensial salah: biarkan nilai terakhir
+                }
+              }
               for (const bp of state.bgpPeers) {
                 if (bp.deviceId === dev.id && prevPeerStates.get(bp.peerIp) === "Established" && bp.state !== "Established") {
                   cyberAlerts.push({
@@ -268,17 +290,56 @@ export async function refreshNocTelemetry(forceRealPing = false): Promise<NocSta
               }
             }
 
+            const busiestIface = [...dev.interfaces].sort(
+              (a, b) => (b.rxMbps || 0) - (a.rxMbps || 0)
+            )[0];
+            const busiestUtil =
+              busiestIface && busiestIface.speedMbps
+                ? (busiestIface.rxMbps || 0) / busiestIface.speedMbps
+                : 0;
             if (
-              dev.capacityMbps > 0 &&
-              (dev.totalRxMbps >= dev.capacityMbps * 0.85 ||
-                (prevRx > 50 && dev.totalRxMbps > prevRx * 3 && dev.totalRxMbps > 500 && dev.packetLossPct > 0))
+              busiestIface &&
+              busiestIface.speedMbps > 0 &&
+              (dev.capacityMbps > 0 &&
+                dev.totalRxMbps >= dev.capacityMbps * 0.85 ||
+                busiestUtil >= 0.9 ||
+                (dev.packetLossPct > 2 && busiestUtil >= 0.75) ||
+                (prevRx > 50 &&
+                  dev.totalRxMbps > prevRx * 3 &&
+                  dev.totalRxMbps > 500 &&
+                  dev.packetLossPct > 2))
             ) {
               cyberAlerts.push({
                 severity: "critical",
                 category: "ddos_spike",
-                sourceIp: dev.ipAddress,
-                target: dev.name,
-                summary: `Lonjakan trafik mencurigakan ${dev.totalRxMbps} Mbps (kapasitas ${dev.capacityMbps} Mbps, loss ${dev.packetLossPct}%).`,
+                sourceIp: await (async () => {
+                  if (!dev.sshUser || !dev.sshPassword) return "tidak teridentifikasi";
+                  const candidates = dev.interfaces
+                    .filter((i) => i.speedMbps > 0 && (i.rxMbps || 0) > 50 && i.name)
+                    .sort((a, b) => (b.rxMbps || 0) - (a.rxMbps || 0))
+                    .slice(0, 6);
+                  if (!candidates.length) return "tidak teridentifikasi";
+                  const results = await Promise.allSettled(
+                    candidates.map((c) =>
+                      probeTopTalker({
+                        host: dev.ipAddress,
+                        port: dev.sshPort || 22,
+                        user: dev.sshUser as string,
+                        pass: dev.sshPassword as string,
+                        interfaceName: c.name as string,
+                        durationSec: 3,
+                      })
+                    )
+                  );
+                  const found = results
+                    .filter((r): r is PromiseFulfilledResult<string> =>
+                      r.status === "fulfilled" && Boolean(r.value) && r.value !== ""
+                    )
+                    .map((r) => r.value);
+                  return found[0] || "tidak teridentifikasi";
+                })(),
+                target: dev.name + " (" + dev.ipAddress + ")",
+                summary: `Lonjakan trafik di ${busiestIface.name}: ${busiestIface.rxMbps} Mbps (${Math.round(busiestUtil * 100)}% dari ${busiestIface.speedMbps} Mbps), loss ${dev.packetLossPct}%.`,
                 mitigationAction: "Terapkan rate-limit / SYN-flood drop di firewall & aktifkan BGP RTBH blackhole bila serangan berlanjut.",
               });
             }

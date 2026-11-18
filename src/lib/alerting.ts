@@ -13,11 +13,13 @@ export const DEFAULT_ALERTING_CONFIG: AlertingConfig = {
   telegramEnabled: false,
   telegramBotToken: "",
   telegramChatId: "",
+  telegramBotName: "",
   whatsappEnabled: false,
   whatsappProvider: "fonnte",
   whatsappApiUrl: "https://api.fonnte.com/send",
   whatsappToken: "",
   whatsappTarget: "",
+  whatsappBotName: "",
   notifyOnCritical: true,
   notifyOnOffline: true,
   notifyOnWarning: false,
@@ -42,12 +44,14 @@ export function toPublicAlertingConfig(
     hasTelegramToken: Boolean(merged.telegramBotToken.trim()),
     telegramTokenMasked: maskSecret(merged.telegramBotToken),
     telegramChatId: merged.telegramChatId,
+    telegramBotName: merged.telegramBotName,
     whatsappEnabled: merged.whatsappEnabled,
     whatsappProvider: merged.whatsappProvider,
     whatsappApiUrl: merged.whatsappApiUrl,
     hasWhatsappToken: Boolean(merged.whatsappToken.trim()),
     whatsappTokenMasked: maskSecret(merged.whatsappToken),
     whatsappTarget: merged.whatsappTarget,
+    whatsappBotName: merged.whatsappBotName,
     notifyOnCritical: merged.notifyOnCritical,
     notifyOnOffline: merged.notifyOnOffline,
     notifyOnWarning: merged.notifyOnWarning,
@@ -352,7 +356,7 @@ export async function reportCyberThreat(params: {
   const msg =
     `[NOCVISION CYBER DEFENSE - ${params.severity.toUpperCase()}]\n` +
     `Ancaman: ${params.category.toUpperCase()}\n` +
-    `Sumber IP: ${params.sourceIp}\n` +
+    `IP Penyerang: ${params.sourceIp}\n` +
     `Target: ${params.target}\n` +
     `Detail: ${params.summary}\n` +
     `Mitigasi: ${params.mitigationAction}`;
@@ -401,7 +405,7 @@ export function recordAuthAccessLog(params: {
   const msg =
     `[NOCVISION AUTH - ${label}]\n` +
     `Akun: ${entry.username}${entry.role ? ` (${entry.role})` : ""}\n` +
-    `IP Sumber: ${entry.sourceIp}\n` +
+    `IP Penyerang: ${entry.sourceIp}\n` +
     `Status: ${params.reason}\n` +
     `Waktu: ${new Date(now).toLocaleString("id-ID")}`;
 

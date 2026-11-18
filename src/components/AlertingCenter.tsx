@@ -119,11 +119,13 @@ export default function AlertingCenter({
           telegramEnabled: config.telegramEnabled,
           telegramBotToken: telegramBotTokenInput.trim() || undefined,
           telegramChatId: config.telegramChatId,
+          telegramBotName: config.telegramBotName,
           whatsappEnabled: config.whatsappEnabled,
           whatsappProvider: config.whatsappProvider,
           whatsappApiUrl: config.whatsappApiUrl,
           whatsappToken: whatsappTokenInput.trim() || undefined,
           whatsappTarget: config.whatsappTarget,
+          whatsappBotName: config.whatsappBotName,
           notifyOnCritical: config.notifyOnCritical,
           notifyOnOffline: config.notifyOnOffline,
           notifyOnWarning: config.notifyOnWarning,
@@ -188,6 +190,40 @@ export default function AlertingCenter({
       if (channel === "telegram") setTestingTg(false);
       else setTestingWa(false);
     }
+  };
+
+  const handleDeleteChannel = async (channel: "telegram" | "whatsapp") => {
+    if (!canEdit) return;
+    try {
+      const res = await fetch("/api/alerting", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reset_config", channel }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        onNotify(data.error || "Gagal menghapus konfigurasi Alerting.");
+        return;
+      }
+      if (data.config) setConfig(data.config);
+      setTelegramBotTokenInput("");
+      setWhatsappTokenInput("");
+      onNotify(
+        "Konfigurasi " + (channel === "telegram" ? "Telegram" : "WhatsApp") + " dihapus."
+      );
+    } catch {
+      onNotify("Gagal menghapus konfigurasi Alerting.");
+    }
+  };
+
+  const handleEditChannel = (channel: "telegram" | "whatsapp") => {
+    const id =
+      channel === "telegram" ? "telegram-config-card" : "whatsapp-config-card";
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    const input = el.querySelector("input") as HTMLInputElement | null;
+    if (input) setTimeout(() => input.focus(), 400);
   };
 
   const handleClearLogs = async () => {
@@ -275,6 +311,66 @@ export default function AlertingCenter({
         </button>
       </div>
 
+      {/* Ringkasan Konfigurasi Tersimpan */}
+      <div className={`${cardSurface} p-5`}>
+        <h4 className={`text-sm font-bold ${headingText} mb-3`}>
+          Konfigurasi Alert Tersimpan
+        </h4>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs font-mono">
+          <div className={`rounded-xl border p-3 space-y-1 ${subBoxCls}`}>
+            <div className={`font-bold ${headingText}`}>Telegram</div>
+            <div>Status: {config.telegramEnabled ? "Aktif" : "Nonaktif"}</div>
+            <div>Nama Bot: {config.telegramBotName || "-"}</div>
+            <div>Chat ID: {config.telegramChatId || "-"}</div>
+            <div>Token: {config.hasTelegramToken ? config.telegramTokenMasked : "-"}</div>
+            <div className="pt-1 flex gap-2">
+              <button
+                type="button"
+                disabled={!canEdit}
+                onClick={() => handleEditChannel("telegram")}
+                className="px-2.5 py-1 rounded-lg border border-sky-400/40 text-sky-400 text-[11px] font-bold cursor-pointer disabled:opacity-50"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                disabled={!canEdit}
+                onClick={() => handleDeleteChannel("telegram")}
+                className="px-2.5 py-1 rounded-lg border border-rose-400/40 text-rose-400 text-[11px] font-bold cursor-pointer disabled:opacity-50"
+              >
+                Hapus
+              </button>
+            </div>
+          </div>
+          <div className={`rounded-xl border p-3 space-y-1 ${subBoxCls}`}>
+            <div className={`font-bold ${headingText}`}>WhatsApp</div>
+            <div>Status: {config.whatsappEnabled ? "Aktif" : "Nonaktif"}</div>
+            <div>Provider: {config.whatsappProvider}</div>
+            <div>Nama Bot: {config.whatsappBotName || "-"}</div>
+            <div>Target: {config.whatsappTarget || "-"}</div>
+            <div>Token: {config.hasWhatsappToken ? config.whatsappTokenMasked : "-"}</div>
+            <div className="pt-1 flex gap-2">
+              <button
+                type="button"
+                disabled={!canEdit}
+                onClick={() => handleEditChannel("whatsapp")}
+                className="px-2.5 py-1 rounded-lg border border-sky-400/40 text-sky-400 text-[11px] font-bold cursor-pointer disabled:opacity-50"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                disabled={!canEdit}
+                onClick={() => handleDeleteChannel("whatsapp")}
+                className="px-2.5 py-1 rounded-lg border border-rose-400/40 text-rose-400 text-[11px] font-bold cursor-pointer disabled:opacity-50"
+              >
+                Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Bot Channels Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Telegram Bot API */}
@@ -329,6 +425,22 @@ export default function AlertingCenter({
                     ? "Kosongkan jika tidak ingin mengubah token"
                     : "123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxx"
                 }
+                className={inputCls}
+              />
+            </div>
+
+            <div>
+              <label className={`block text-[11px] font-semibold mb-1 ${mutedText}`}>
+                Nama Bot / Label
+              </label>
+              <input
+                type="text"
+                disabled={!canEdit}
+                value={config.telegramBotName || ""}
+                onChange={(e) =>
+                  setConfig((prev) => ({ ...prev, telegramBotName: e.target.value }))
+                }
+                placeholder="mis. NOC-Monitor-Telegram"
                 className={inputCls}
               />
             </div>
@@ -424,6 +536,21 @@ export default function AlertingCenter({
               </select>
             </div>
 
+            <div>
+              <label className={`block text-[11px] font-semibold mb-1 ${mutedText}`}>
+                Nama Bot / Label
+              </label>
+              <input
+                type="text"
+                disabled={!canEdit}
+                value={config.whatsappBotName || ""}
+                onChange={(e) =>
+                  setConfig((prev) => ({ ...prev, whatsappBotName: e.target.value }))
+                }
+                placeholder="mis. NOC-Monitor-WA"
+                className={inputCls}
+              />
+            </div>
             <div>
               <label className={`block text-[11px] font-semibold mb-1 ${mutedText}`}>
                 Target Nomor WA / Group ID

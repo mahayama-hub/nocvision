@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { NetworkDevice, TopologyLink } from "@/lib/types";
+import { BgpPeer, NetworkDevice, TopologyLink } from "@/lib/types";
 import { VENDOR_PROFILES } from "@/lib/vendor-profiles";
 import {
   Activity,
@@ -19,6 +19,7 @@ interface TopologyMapProps {
   links: TopologyLink[];
   selectedDeviceId: string | null;
   onSelectDevice: (device: NetworkDevice) => void;
+  bgpPeers?: BgpPeer[];
 }
 
 export default function TopologyMap({
@@ -27,6 +28,7 @@ export default function TopologyMap({
   links,
   selectedDeviceId,
   onSelectDevice,
+  bgpPeers = [],
 }: TopologyMapProps) {
   const isLightCard = theme === "light" || theme === "twilight";
   const cardCls = isLightCard
@@ -38,6 +40,34 @@ export default function TopologyMap({
   const headingText = isLightCard ? "text-slate-900" : "text-white";
   const mutedText = isLightCard ? "text-slate-500" : "text-slate-400";
   const cyanNum = isLightCard ? "text-sky-600" : "text-cyan-300";
+  // Auto-label upstream dari sesi BGP yang Established (bukan hardcode)
+  const AS_PROVIDER: Record<number, string> = {
+    17451: "BIZNET",
+    7713: "TELIN",
+    4761: "INDOSAT",
+    4800: "INDOSAT",
+    24203: "ICON+",
+    58453: "CMI",
+    6939: "HE",
+    13335: "CLOUDFLARE",
+    2914: "NTT",
+    3491: "PCCW",
+  };
+  const upstreamProviders = Array.from(
+    new Set(
+      bgpPeers
+        .filter((p) => p.state === "Established")
+        .map((p) => {
+          const name = AS_PROVIDER[p.remoteAs];
+          return name ? name + " (AS" + p.remoteAs + ")" : "AS" + p.remoteAs;
+        })
+    )
+  );
+  const upstreamLabel =
+    upstreamProviders.length > 0
+      ? "UPSTREAM — " + upstreamProviders.join(" / ")
+      : "UPSTREAM";
+
   const coreRouters = devices.filter((d) => d.role === "core_router");
   const switches = devices.filter(
     (d) => d.role === "dist_switch" || d.role === "access_switch" || d.role === "firewall"
@@ -162,7 +192,7 @@ export default function TopologyMap({
                 fontSize="11"
                 fontWeight="600"
               >
-                UPSTREAM TRANSIT (Telin / IIX / OpenIXP / HE)
+                {upstreamLabel}
               </text>
             </g>
 

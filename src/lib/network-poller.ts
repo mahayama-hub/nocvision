@@ -639,6 +639,154 @@ async function snmpWalkSubtree(
  * Walks BGP4-MIB::bgpPeerTable (1.3.6.1.2.1.15.3.1) via SNMPv2c GetNextRequest
  * to discover live BGP peer IP, Remote AS, FSM State, and Established Time.
  */
+
+export interface RouterOsBgpPrefix {
+  peerIp: string;
+  received: number;
+  advertised: number;
+}
+
+/**
+ * Ambil jumlah prefix BGP langsung dari RouterOS via SSH (BGP4-MIB tidak punya
+ * OID prefix counter). Perlu kredensial SSH read-only pada perangkat.
+ */
+export async function probeTopTalker(params: {
+  host: string;
+  port: number;
+  user: string;
+  pass: string;
+  interfaceName: string;
+  durationSec?: number;
+}): Promise<string> {
+  const host = sanitizeHost(params.host);
+  const iface = String(params.interfaceName).replace(/"/g, "");
+  const dur = Math.min(Math.max(params.durationSec || 3, 2), 6);
+  const remoteCmd = '/tool torch interface="' + iface + '" duration=' + dur;
+  const args = [
+    "-p",
+    params.pass,
+    "ssh",
+    "-p",
+    String(params.port || 22),
+    "-o",
+    "StrictHostKeyChecking=no",
+    "-o",
+    "UserKnownHostsFile=/dev/null",
+    "-o",
+    "LogLevel=ERROR",
+    "-o",
+    "ConnectTimeout=8",
+    params.user + "@" + host,
+    remoteCmd,
+  ];
+  const { stdout } = await execFileAsync("sshpass", args, {
+    timeout: (dur + 12) * 1000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  const lines = String(stdout).split(String.fromCharCode(10));
+  const score = new Map<string, number>();
+  const toBps = (token: string) => {
+    const t = token.replace("bps", "");
+    const mult = t.endsWith("k") ? 1e3 : t.endsWith("M") ? 1e6 : t.endsWith("G") ? 1e9 : 1;
+    const num = Number(t.replace(/[^0-9.]/g, ""));
+    return Number.isFinite(num) ? num * mult : 0;
+  };
+  for (const raw of lines) {
+    const m = raw.match(/^\s*ip\s+\S+\s+\S+\s+(\d+\.\d+\.\d+\.\d+)/);
+    if (!m) continue;
+    const ip = m[1];
+    const tokens = raw.trim().split(/\s+/);
+    const bpsTokens = tokens.filter((t) => t.includes("bps"));
+    const rx = bpsTokens.length >= 2 ? toBps(bpsTokens[1]) : 0;
+    score.set(ip, (score.get(ip) || 0) + rx);
+  }
+  let best = "";
+  let bestVal = 0;
+  for (const [ip, val] of score.entries()) {
+    if (val > bestVal) {
+      bestVal = val;
+      best = ip;
+    }
+  }
+  return best;
+}
+
+export async function fetchRouterOsBgpPrefixes(params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+}): Promise<RouterOsBgpPrefix[]> {
+  const host = sanitizeHost(params.host);
+  const remoteCmd = [
+    "/routing bgp session print detail",
+    "/routing bgp advertisements print count-only",
+    "/ip route print count-only where bgp",
+  ].join("; ");
+  const args = [
+    "-p",
+    params.password,
+    "ssh",
+    "-p",
+    String(params.port || 22),
+    "-o",
+    "StrictHostKeyChecking=no",
+    "-o",
+    "UserKnownHostsFile=/dev/null",
+    "-o",
+    "LogLevel=ERROR",
+    "-o",
+    "ConnectTimeout=8",
+    params.user + "@" + host,
+    remoteCmd,
+  ];
+  const { stdout } = await execFileAsync("sshpass", args, {
+    timeout: 25000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  const text = String(stdout);
+  const lines = text.split(String.fromCharCode(10));
+  const records: RouterOsBgpPrefix[] = [];
+  let current: RouterOsBgpPrefix | null = null;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line.length > 1 && line[0] >= "0" && line[0] <= "9" && (line[1] === " " || line[1] === "	")) {
+      if (current) records.push(current);
+      current = { peerIp: "", received: 0, advertised: 0 };
+    }
+    if (!current) continue;
+    const ipIdx = line.indexOf("remote.address=");
+    if (ipIdx >= 0) {
+      const rest = line.slice(ipIdx + 15).trim();
+      const ip = rest.split(" ")[0].trim();
+      if (ip) current.peerIp = ip;
+    }
+    const cntIdx = line.indexOf("prefix-count=");
+    if (cntIdx >= 0) {
+      const rest = line.slice(cntIdx + 13).trim();
+      const num = rest.split(" ")[0].replace(/[^0-9]/g, "");
+      if (num) current.received = Number(num);
+    }
+  }
+  if (current) records.push(current);
+
+  const numbers: number[] = [];
+  for (const rawLine of lines) {
+    const t = rawLine.trim();
+    if (t.length > 0 && /^[0-9]+$/.test(t)) numbers.push(Number(t));
+  }
+  const advertised = numbers.length >= 2 ? numbers[numbers.length - 2] : 0;
+  const installed = numbers.length >= 1 ? numbers[numbers.length - 1] : 0;
+
+  const peers = records.filter((r) => r.peerIp);
+  if (peers.length === 1 && !peers[0].received) peers[0].received = installed;
+  return peers.map((r, idx) => ({
+    peerIp: r.peerIp,
+    received: r.received || (peers.length === 1 ? installed : 0),
+    advertised: idx === 0 ? advertised : 0,
+  }));
+}
+
 export async function probeSnmpBgpPeers(
   hostInput: string,
   community = "public",

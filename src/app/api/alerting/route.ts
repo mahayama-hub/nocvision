@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import fs from "fs";
 import { requireSessionUser } from "@/lib/auth";
 import { loadNocState, saveNocState } from "@/lib/noc-store";
 import {
@@ -11,6 +12,18 @@ import {
   validateBotApiUrl,
 } from "@/lib/alerting";
 import { AlertDeliveryLog, AlertingConfig, WhatsAppBotProvider } from "@/lib/types";
+
+
+function logAlertingAttempt(entry: Record<string, unknown>) {
+  try {
+    fs.appendFileSync(
+      "/var/log/nocvision-alerting.log",
+      JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n"
+    );
+  } catch {
+    // abaikan kegagalan logging
+  }
+}
 
 export async function GET(req: NextRequest) {
   const auth = requireSessionUser(req, "view_dashboard");
@@ -68,12 +81,12 @@ export async function POST(req: NextRequest) {
           : getDefaultWhatsAppUrl(whatsappProvider);
 
       const whatsappEnabled = Boolean(body.whatsappEnabled);
-      if (whatsappEnabled || rawWaUrl) {
-        if (rawWaUrl) {
-          const check = validateBotApiUrl(rawWaUrl);
-          if (!check.ok) {
-            return NextResponse.json({ ok: false, error: check.error }, { status: 400 });
-          }
+      // validasi hanya untuk channel yang memang diaktifkan,
+      // supaya simpan Telegram tidak ikut gagal karena URL WhatsApp kosong
+      if (whatsappEnabled) {
+        const check = validateBotApiUrl(rawWaUrl);
+        if (!check.ok) {
+          return NextResponse.json({ ok: false, error: check.error }, { status: 400 });
         }
       }
 
@@ -81,11 +94,13 @@ export async function POST(req: NextRequest) {
         telegramEnabled: Boolean(body.telegramEnabled),
         telegramBotToken: nextTelegramToken,
         telegramChatId: String(body.telegramChatId ?? prev.telegramChatId).trim(),
+        telegramBotName: String(body.telegramBotName ?? prev.telegramBotName ?? "").trim(),
         whatsappEnabled,
         whatsappProvider,
         whatsappApiUrl: rawWaUrl,
         whatsappToken: nextWhatsappToken,
         whatsappTarget: String(body.whatsappTarget ?? prev.whatsappTarget).trim(),
+        whatsappBotName: String(body.whatsappBotName ?? prev.whatsappBotName ?? "").trim(),
         notifyOnCritical:
           body.notifyOnCritical !== undefined
             ? Boolean(body.notifyOnCritical)
@@ -115,12 +130,41 @@ export async function POST(req: NextRequest) {
 
       state.alertingConfig = nextConfig;
       saveNocState(state);
+      logAlertingAttempt({
+        action: "save_config",
+        user: auth.user.username,
+        telegramEnabled: nextConfig.telegramEnabled,
+        telegramChatId: nextConfig.telegramChatId,
+        hasTelegramToken: Boolean(nextConfig.telegramBotToken),
+        whatsappEnabled: nextConfig.whatsappEnabled,
+        whatsappTarget: nextConfig.whatsappTarget,
+        result: "ok",
+      });
 
       return NextResponse.json({
         ok: true,
         config: toPublicAlertingConfig(nextConfig),
         logs: state.alertLogs || [],
       });
+    }
+
+    if (action === "reset_config") {
+      const channel = String(body.channel || "all");
+      const next: AlertingConfig = { ...prev };
+      if (channel === "telegram" || channel === "all") {
+        next.telegramEnabled = false;
+        next.telegramBotToken = "";
+        next.telegramChatId = "";
+      }
+      if (channel === "whatsapp" || channel === "all") {
+        next.whatsappEnabled = false;
+        next.whatsappToken = "";
+        next.whatsappTarget = "";
+      }
+      next.updatedAt = new Date().toISOString();
+      state.alertingConfig = next;
+      saveNocState(state);
+      return NextResponse.json({ ok: true, config: toPublicAlertingConfig(next) });
     }
 
     if (action === "test_telegram") {
