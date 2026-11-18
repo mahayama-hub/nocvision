@@ -5,8 +5,9 @@ import {
   refreshNocTelemetry,
   resetNocState,
   saveNocState,
+  syncBgpPeersForDevice,
 } from "@/lib/noc-store";
-import { executeRealPing, probeTcpPort } from "@/lib/network-poller";
+import { pollDeviceRealtime, probeSnmpInterfaces } from "@/lib/network-poller";
 import { VENDOR_PROFILES } from "@/lib/vendor-profiles";
 import {
   AuditLogEntry,
@@ -33,6 +34,9 @@ const ACTION_PERMISSION_MAP: Record<string, PermissionKey> = {
   commit_wizard_config: "manage_devices",
   resolve_pending_commit: "manage_devices",
   delete_route_filter: "manage_devices",
+  sync_bgp_snmp: "manage_devices",
+  add_bgp_peer: "manage_devices",
+  delete_bgp_peer: "manage_devices",
 };
 
 export async function GET(req: NextRequest) {
@@ -97,28 +101,46 @@ export async function POST(req: NextRequest) {
       const profile = VENDOR_PROFILES[vendor] || VENDOR_PROFILES.Other;
       const ipAddress = (body.ipAddress as string)?.trim() || "192.168.1.1";
       const pollingMode =
-        (body.pollingMode as "simulation" | "live_icmp_tcp" | "hybrid") || "hybrid";
+        (body.pollingMode as "simulation" | "live_icmp_tcp" | "hybrid") || "live_icmp_tcp";
 
       let latencyMs = 1.8;
       let packetLossPct = 0;
       let status: "online" | "warning" | "critical" | "offline" = "online";
+      let realUptime = "0d 00h 00m";
+      let realOs = (body.osVersion as string)?.trim() || profile.defaultOs;
 
-      if (pollingMode === "live_icmp_tcp" || body.testNow) {
-        const pingRes = await executeRealPing(ipAddress, 2);
-        const sshProbe = await probeTcpPort(ipAddress, Number(body.sshPort) || 22, "SSH", 1000);
-        if (pingRes.alive || sshProbe.open) {
-          latencyMs = pingRes.alive ? pingRes.latencyMs : sshProbe.responseTimeMs;
-          packetLossPct = pingRes.alive ? pingRes.packetLossPct : 0;
-          status = "online";
-        } else if (pollingMode === "live_icmp_tcp") {
-          status = "offline";
-          latencyMs = 0;
-          packetLossPct = 100;
-        }
+      if (pollingMode !== "simulation" || body.testNow) {
+        const poll = await pollDeviceRealtime({
+          ipAddress,
+          sshPort: Number(body.sshPort) || profile.defaultPorts.ssh,
+          apiPort: Number(body.apiPort) || profile.defaultPorts.api,
+          snmpPort: Number(body.snmpPort) || profile.defaultPorts.snmp,
+          snmpCommunity: (body.snmpCommunity as string) || "public",
+        });
+        latencyMs = poll.latencyMs;
+        packetLossPct = poll.packetLossPct;
+        status = poll.status;
+        if (poll.snmpResult.uptime) realUptime = poll.snmpResult.uptime;
+        if (poll.snmpResult.sysDescr) realOs = poll.snmpResult.sysDescr.slice(0, 64);
       }
 
       const newId = `dev-${Date.now().toString().slice(-6)}`;
       const isOlt = role === "olt";
+      const realInterfaces =
+        status !== "offline" && pollingMode !== "simulation"
+          ? await probeSnmpInterfaces(
+              ipAddress,
+              (body.snmpCommunity as string) || "public",
+              Number(body.snmpPort) || profile.defaultPorts.snmp,
+              newId
+            )
+          : [];
+      const realRxMbps = Number(
+        realInterfaces.reduce((sum, i) => sum + i.rxMbps, 0).toFixed(2)
+      );
+      const realTxMbps = Number(
+        realInterfaces.reduce((sum, i) => sum + i.txMbps, 0).toFixed(2)
+      );
 
       const newDevice: NetworkDevice = {
         id: newId,
@@ -129,7 +151,7 @@ export async function POST(req: NextRequest) {
         ipAddress,
         vendor,
         model: (body.model as string)?.trim() || `${vendor} Enterprise Series`,
-        osVersion: (body.osVersion as string)?.trim() || profile.defaultOs,
+        osVersion: realOs,
         role,
         location: (body.location as string)?.trim() || "POP Utama - Rack Server",
         rackPosition: (body.rackPosition as string)?.trim() || "Rack A-02",
@@ -141,65 +163,25 @@ export async function POST(req: NextRequest) {
         snmpPort: Number(body.snmpPort) || profile.defaultPorts.snmp,
         sshPort: Number(body.sshPort) || profile.defaultPorts.ssh,
         apiPort: Number(body.apiPort) || profile.defaultPorts.api,
-        uptime: "1d 00h 12m",
-        cpuUsage: 18,
-        memoryUsage: 34,
-        temperatureC: 41,
-        voltageV: isOlt ? -48.0 : 24.0,
-        psu1Status: "ok",
-        psu2Status: "ok",
-        fanRpm: 4500,
+        uptime: status === "offline" ? "0d 00h 00m" : realUptime,
+        cpuUsage: 0,
+        memoryUsage: 0,
+        temperatureC: 0,
+        voltageV: undefined,
+        psu1Status: status === "offline" ? "na" : "ok",
+        psu2Status: "na",
+        fanRpm: 0,
         latencyMs,
         packetLossPct,
-        totalRxMbps: 420,
-        totalTxMbps: 180,
+        totalRxMbps: realRxMbps,
+        totalTxMbps: realTxMbps,
         capacityMbps: 10000,
         lastPolled: new Date().toISOString(),
         coordinates: {
           x: 200 + Math.floor(Math.random() * 500),
           y: role === "core_router" ? 80 : role === "olt" ? 390 : 230,
         },
-        interfaces: [
-          {
-            id: `if-${newId}-1`,
-            name: vendor === "MikroTik" ? "sfp-sfpplus1" : "TenGigabitEthernet0/1",
-            description: "PRIMARY-UPLINK-10G",
-            type: "sfp_plus",
-            status: status === "offline" ? "down" : "up",
-            speedMbps: 10000,
-            rxMbps: status === "offline" ? 0 : 420,
-            txMbps: status === "offline" ? 0 : 180,
-            rxPowerDbm: -3.6,
-            txPowerDbm: -1.2,
-            sfpTempC: 42,
-            crcErrors: 0,
-            drops: 0,
-          },
-          {
-            id: `if-${newId}-2`,
-            name: vendor === "MikroTik" ? "ether1" : "GigabitEthernet0/1",
-            description: "MGMT-OUT-OF-BAND",
-            type: "ethernet",
-            status: "up",
-            speedMbps: 1000,
-            rxMbps: 12,
-            txMbps: 8,
-            crcErrors: 0,
-            drops: 0,
-          },
-          {
-            id: `if-${newId}-3`,
-            name: vendor === "MikroTik" ? "sfp-sfpplus2" : "TenGigabitEthernet0/2",
-            description: "STANDBY-UPLINK (NO LINK)",
-            type: "sfp_plus",
-            status: "down",
-            speedMbps: 10000,
-            rxMbps: 0,
-            txMbps: 0,
-            crcErrors: 0,
-            drops: 0,
-          },
-        ],
+        interfaces: realInterfaces,
         ponPorts: isOlt
           ? [
               {
@@ -274,30 +256,64 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Device not found" }, { status: 404 });
       }
 
-      const pingRes = await executeRealPing(dev.ipAddress, 2);
-      const sshRes = await probeTcpPort(dev.ipAddress, dev.sshPort || 22, "SSH", 1200);
-      const webRes = await probeTcpPort(dev.ipAddress, 80, "HTTP", 1200);
+      const poll = await pollDeviceRealtime({
+        ipAddress: dev.ipAddress,
+        sshPort: dev.sshPort,
+        apiPort: dev.apiPort,
+        snmpPort: dev.snmpPort,
+        snmpCommunity: dev.snmpCommunity,
+      });
 
       dev.lastPolled = new Date().toISOString();
-      if (pingRes.alive || sshRes.open || webRes.open) {
-        dev.latencyMs = pingRes.alive
-          ? pingRes.latencyMs
-          : sshRes.open
-          ? sshRes.responseTimeMs
-          : webRes.responseTimeMs;
-        dev.packetLossPct = pingRes.alive ? pingRes.packetLossPct : 0;
-        if (dev.status === "offline") dev.status = "online";
-      } else if (dev.pollingMode === "live_icmp_tcp") {
+      dev.latencyMs = poll.latencyMs;
+      dev.packetLossPct = poll.packetLossPct;
+      if (poll.snmpResult.uptime) dev.uptime = poll.snmpResult.uptime;
+      if (poll.snmpResult.sysDescr) dev.osVersion = poll.snmpResult.sysDescr.slice(0, 64);
+
+      if (poll.alive) {
+        dev.status = poll.status;
+        if (poll.snmpResult.reachable) {
+          const realIfaces = await probeSnmpInterfaces(
+            dev.ipAddress,
+            dev.snmpCommunity || "public",
+            dev.snmpPort || 161,
+            dev.id
+          );
+          if (realIfaces.length > 0) {
+            dev.interfaces = realIfaces;
+            dev.totalRxMbps = Number(
+              realIfaces.reduce((sum, i) => sum + i.rxMbps, 0).toFixed(2)
+            );
+            dev.totalTxMbps = Number(
+              realIfaces.reduce((sum, i) => sum + i.txMbps, 0).toFixed(2)
+            );
+          }
+          if (dev.role === "core_router" || dev.role === "firewall") {
+            await syncBgpPeersForDevice(state, dev);
+          }
+        }
+      } else {
         dev.status = "offline";
-        dev.latencyMs = 0;
-        dev.packetLossPct = 100;
+        dev.cpuUsage = 0;
+        dev.totalRxMbps = 0;
+        dev.totalTxMbps = 0;
+        dev.interfaces.forEach((iface) => {
+          iface.rxMbps = 0;
+          iface.txMbps = 0;
+        });
+        state.bgpPeers.forEach((bp) => {
+          if (bp.deviceId === dev.id) {
+            bp.state = "Idle";
+            bp.uptime = "0d 00h 00m";
+          }
+        });
       }
 
       saveNocState(state);
       return NextResponse.json({
         ok: true,
-        pingResult: pingRes,
-        tcpResult: { ssh: sshRes, http: webRes },
+        pingResult: poll.pingResult,
+        tcpResult: { ssh: poll.sshResult, http: poll.apiResult, snmp: poll.snmpResult },
         device: dev,
         state,
       });
@@ -736,6 +752,71 @@ export async function POST(req: NextRequest) {
           diffPayload: `- ${rule.listName}: ${rule.prefix} (${rule.matchType}) ${rule.action}`,
         });
       }
+      saveNocState(state);
+      return NextResponse.json({ ok: true, state });
+    }
+
+    if (action === "sync_bgp_snmp") {
+      const targetDevs = body.deviceId
+        ? state.devices.filter((d) => d.id === body.deviceId)
+        : state.devices.filter((d) => d.role === "core_router" || d.role === "firewall");
+
+      let totalSynced = 0;
+      for (const dev of targetDevs) {
+        totalSynced += await syncBgpPeersForDevice(state, dev);
+      }
+      saveNocState(state);
+      return NextResponse.json({
+        ok: true,
+        syncedCount: totalSynced,
+        state,
+      });
+    }
+
+    if (action === "add_bgp_peer") {
+      const dev =
+        state.devices.find((d) => d.id === body.deviceId) || state.devices[0];
+      if (!dev) {
+        return NextResponse.json(
+          { error: "Tambahkan perangkat router terlebih dahulu sebelum menambah BGP peer." },
+          { status: 400 }
+        );
+      }
+      const peerIp = String(body.peerIp || "").trim();
+      const remoteAs = Number(body.remoteAs) || 0;
+      if (!peerIp || remoteAs <= 0) {
+        return NextResponse.json(
+          { error: "Peer IP dan Remote ASN (> 0) wajib diisi." },
+          { status: 400 }
+        );
+      }
+      const peerType =
+        body.type === "Upstream" || body.type === "IXP" || body.type === "iBGP"
+          ? body.type
+          : "Peering";
+      state.bgpPeers.unshift({
+        id: `bgp-${Date.now().toString().slice(-6)}`,
+        deviceId: dev.id,
+        deviceName: dev.name,
+        peerName: String(body.peerName || "").trim() || `AS${remoteAs} Peer`,
+        peerIp,
+        remoteAs,
+        type: peerType,
+        state: dev.status === "offline" ? "Idle" : "Established",
+        uptime: dev.status === "offline" ? "0d 00h 00m" : dev.uptime || "0d 00h 01m",
+        prefixesReceived: Number(body.prefixesReceived) || 0,
+        prefixesAdvertised: Number(body.prefixesAdvertised) || 0,
+        rxMbps: 0,
+        txMbps: 0,
+        latencyMs: dev.latencyMs,
+      });
+      saveNocState(state);
+      return NextResponse.json({ ok: true, state });
+    }
+
+    if (action === "delete_bgp_peer") {
+      const peerId = String(body.peerId || "");
+      state.bgpPeers = state.bgpPeers.filter((p) => p.id !== peerId);
       saveNocState(state);
       return NextResponse.json({ ok: true, state });
     }

@@ -179,6 +179,7 @@ export default function DeviceGraphsCenter({
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [selectedPortId, setSelectedPortId] = useState<string>("all_interfaces");
   const [ifaceFilter, setIfaceFilter] = useState<InterfaceFilter>("all");
+  const [ifaceColumns, setIfaceColumns] = useState<1 | 2>(2);
 
   const filteredDevices = devices.filter(
     (d) => roleFilter === "all" || d.role === roleFilter
@@ -450,12 +451,19 @@ export default function DeviceGraphsCenter({
                     iface.status,
                     isLightCard
                   ).shortLabel;
-                  const rateLabel = isInterfaceActive(iface.status)
+                  const rxLabel = isInterfaceActive(iface.status)
                     ? formatBandwidth(iface.rxMbps)
                     : "0 Mbps";
+                  const txLabel = isInterfaceActive(iface.status)
+                    ? formatBandwidth(iface.txMbps)
+                    : "0 Mbps";
+                  const sfpTag =
+                    typeof iface.rxPowerDbm === "number"
+                      ? ` | SFP ${iface.rxPowerDbm} dBm`
+                      : "";
                   return (
                     <option key={iface.id} value={iface.id}>
-                      [{statusTag}] {iface.name} ({rateLabel}) — {iface.description}
+                      [{statusTag}] {iface.name} (Tx {txLabel} / Rx {rxLabel}{sfpTag})
                     </option>
                   );
                 })}
@@ -1213,6 +1221,27 @@ export default function DeviceGraphsCenter({
                 {tab.label}
               </button>
             ))}
+
+            <div className="flex items-center gap-1 ml-2 pl-2 border-l border-slate-500/25">
+              {([2, 1] as const).map((cols) => (
+                <button
+                  key={cols}
+                  type="button"
+                  onClick={() => setIfaceColumns(cols)}
+                  className={`px-2.5 py-1 rounded-full text-xs font-semibold transition cursor-pointer ${
+                    ifaceColumns === cols
+                      ? isLightCard
+                        ? "bg-slate-900 text-white"
+                        : "bg-cyan-400/20 text-cyan-300 border border-cyan-400/40"
+                      : isLightCard
+                      ? "bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200"
+                      : "bg-[#051122] text-slate-400 hover:text-slate-200 border border-sky-500/20"
+                  }`}
+                >
+                  {cols} Kolom
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -1224,7 +1253,11 @@ export default function DeviceGraphsCenter({
             <span className={`font-semibold ${headingText}`}>{activeDevice.name}</span>.
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-4">
+          <div
+            className={`grid gap-5 mt-4 ${
+              ifaceColumns === 1 ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-2"
+            }`}
+          >
             {visibleInterfaceCards.map((item) => {
               const { iface, active, statusMeta, color, series, peakRxMbps: portPeakRx } = item;
               const isCardSelected = effectivePortId === iface.id;
@@ -1297,9 +1330,11 @@ export default function DeviceGraphsCenter({
                     </span>
                   </div>
 
-                  {/* Mini Bandwidth SVG Graph */}
+                  {/* Interface Bandwidth SVG Graph */}
                   <div
-                    className={`rounded-xl p-2 h-28 border ${
+                    className={`rounded-xl p-3 border ${
+                      ifaceColumns === 1 ? "h-56" : "h-44"
+                    } ${
                       isLightCard
                         ? "bg-white border-slate-200/80"
                         : "bg-[#030b18]/80 border-sky-500/15"

@@ -438,41 +438,77 @@ export default function TopologyMap({
                 Port Fisik &amp; SFP Optical DDM ({selectedDevice.interfaces.length})
               </h5>
               <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                {selectedDevice.interfaces.map((iface) => (
-                  <div
-                    key={iface.id}
-                    className={`${subBoxCls} rounded-xl p-2.5 text-xs`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className={`font-mono font-semibold ${cyanNum}`}>
-                        {iface.name}
-                      </span>
-                      <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-500 font-mono">
-                        {(iface.speedMbps / 1000).toFixed(0)}G UP
-                      </span>
-                    </div>
-                    <p className={`${mutedText} text-[11px] truncate mt-0.5`}>
-                      {iface.description}
-                    </p>
-                    <div
-                      className={`flex items-center justify-between mt-1.5 pt-1.5 border-t font-mono text-[11px] ${
-                        isLightCard ? "border-slate-200" : "border-slate-800/70"
-                      }`}
-                    >
-                      <span className="text-emerald-500">
-                        Rx: {iface.rxMbps} Mbps
-                      </span>
-                      <span className="text-sky-500">
-                        Tx: {iface.txMbps} Mbps
-                      </span>
-                      {typeof iface.rxPowerDbm === "number" && (
-                        <span className="text-amber-500">
-                          SFP Rx: {iface.rxPowerDbm} dBm
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                {selectedDevice.interfaces.length === 0 ? (
+                  <p className={`text-xs ${mutedText} py-2`}>
+                    Belum ada interface terbaca (aktifkan SNMPv2c pada perangkat lalu klik Poll).
+                  </p>
+                ) : (
+                  selectedDevice.interfaces.map((iface) => {
+                    const isUp = iface.status === "up" || iface.status === "degraded";
+                    const isSfp =
+                      iface.type === "sfp_plus" ||
+                      iface.type === "qsfp28" ||
+                      iface.type === "gpon" ||
+                      iface.type === "epon";
+                    return (
+                      <div
+                        key={iface.id}
+                        className={`${subBoxCls} rounded-xl p-2.5 text-xs`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`font-mono font-semibold ${cyanNum} truncate`}>
+                            {iface.name}
+                          </span>
+                          <span
+                            className={`text-[11px] px-1.5 py-0.5 rounded font-mono shrink-0 ${
+                              isUp
+                                ? "bg-emerald-500/15 text-emerald-500"
+                                : "bg-rose-500/15 text-rose-400"
+                            }`}
+                          >
+                            {iface.speedMbps >= 1000
+                              ? `${(iface.speedMbps / 1000).toFixed(0)}G`
+                              : `${iface.speedMbps}M`}{" "}
+                            {isUp ? "UP" : "DOWN"}
+                          </span>
+                        </div>
+                        <div
+                          className={`flex flex-wrap items-center justify-between gap-2 mt-1.5 pt-1.5 border-t font-mono text-[11px] ${
+                            isLightCard ? "border-slate-200" : "border-slate-800/70"
+                          }`}
+                        >
+                          <span className="text-sky-500">
+                            Tx: {iface.txMbps} Mbps
+                          </span>
+                          <span className="text-emerald-500">
+                            Rx: {iface.rxMbps} Mbps
+                          </span>
+                          {(isSfp || typeof iface.rxPowerDbm === "number") && (
+                            <span
+                              className={
+                                typeof iface.rxPowerDbm === "number"
+                                  ? iface.rxPowerDbm <= -25
+                                    ? "text-rose-400"
+                                    : iface.rxPowerDbm <= -20
+                                    ? "text-amber-400"
+                                    : "text-emerald-400"
+                                  : mutedText
+                              }
+                            >
+                              {typeof iface.rxPowerDbm === "number"
+                                ? `SFP Rx: ${iface.rxPowerDbm} dBm${
+                                    typeof iface.txPowerDbm === "number"
+                                      ? ` / Tx: ${iface.txPowerDbm} dBm`
+                                      : ""
+                                  }`
+                                : "SFP: N/A"}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </div>
 

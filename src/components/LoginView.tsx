@@ -43,8 +43,8 @@ export default function LoginView({
       : theme === "twilight"
       ? "bento-window-twilight"
       : "bento-window-light";
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin123");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
@@ -87,19 +87,6 @@ export default function LoginView({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await performLogin(username, password);
-  };
-
-  const handleGoogleLogin = async () => {
-    setUsername("hayangteu43@gmail.com");
-    setPassword("admin123");
-    await performLogin("hayangteu43@gmail.com", "admin123");
-  };
-
-  const fillDemoAccount = (u: string, p: string, label: string) => {
-    setUsername(u);
-    setPassword(p);
-    setErrorMsg(null);
-    setInfoMsg(`Kredensial ${label} (${u}) siap digunakan.`);
   };
 
   return (
@@ -147,25 +134,10 @@ export default function LoginView({
               Network Operations
             </span>
 
-            <div className="flex items-center gap-4">
-              <button
-                type="button"
-                onClick={() =>
-                  fillDemoAccount("engineer", "teknisi123", "NOC Engineer")
-                }
-                className="text-slate-200 hover:text-[#00d4ff] font-medium transition cursor-pointer"
-              >
-                NOC Engineer
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  fillDemoAccount("admin", "admin123", "Tenant Owner / Admin")
-                }
-                className="px-4 py-1.5 rounded-full border border-sky-400/60 bg-sky-500/10 hover:bg-sky-500/20 text-sky-200 font-semibold text-xs tracking-wide shadow-[0_0_15px_rgba(0,184,255,0.2)] transition cursor-pointer"
-              >
-                SLA 99.9% Live
-              </button>
+            <div className="flex items-center gap-3">
+              <span className="px-3.5 py-1.5 rounded-full border border-sky-400/40 bg-sky-500/10 text-sky-200 font-semibold text-xs tracking-wide">
+                NOCVISION AAA
+              </span>
             </div>
           </div>
 
@@ -389,7 +361,9 @@ export default function LoginView({
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Email atau Username (admin)"
+                  placeholder="Email atau Username"
+                  autoComplete="username"
+                  maxLength={128}
                   className={`w-full border rounded-xl px-4 py-3.5 text-sm placeholder-slate-400 focus:outline-none shadow-inner font-mono transition ${
                     isLightCard
                       ? "bg-white border-slate-200 focus:border-sky-500 text-slate-900"
@@ -406,6 +380,8 @@ export default function LoginView({
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Password"
+                  autoComplete="current-password"
+                  maxLength={128}
                   className={`w-full border rounded-xl px-4 pr-11 py-3.5 text-sm placeholder-slate-400 focus:outline-none shadow-inner font-mono transition ${
                     isLightCard
                       ? "bg-white border-slate-200 focus:border-sky-500 text-slate-900"
@@ -449,49 +425,7 @@ export default function LoginView({
                 </button>
               </div>
 
-              {/* Divider "or" */}
-              <div className="relative flex items-center justify-center py-2">
-                <div className={`w-full border-t ${isLightCard ? "border-slate-200" : "border-sky-500/20"}`} />
-                <span
-                  className={`px-3 text-xs text-slate-400 font-medium ${
-                    isLightCard ? "bg-white" : "bg-[#040d21]"
-                  }`}
-                >
-                  or
-                </span>
-                <div className={`w-full border-t ${isLightCard ? "border-slate-200" : "border-sky-500/20"}`} />
-              </div>
-
-              {/* Button 1: Login with Google */}
-              <button
-                type="button"
-                onClick={handleGoogleLogin}
-                disabled={isLoading}
-                className="w-full py-3.5 px-5 rounded-xl bg-gradient-to-r from-[#2563eb] via-[#1d4ed8] to-[#1e40af] hover:brightness-110 border border-blue-400/35 text-white font-semibold text-sm shadow-[0_8px_20px_rgba(29,78,216,0.28)] flex items-center justify-center gap-2.5 transition cursor-pointer"
-              >
-                {/* Google "G" Icon SVG */}
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
-                  <path
-                    fill="#EA4335"
-                    d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.8C6.2 7.2 8.9 5 12 5z"
-                  />
-                  <path
-                    fill="#4285F4"
-                    d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.6l3.7 2.9c2.2-2 3.7-5 3.7-8.7z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.3 14.8c-.2-.8-.4-1.6-.4-2.5s.2-1.7.4-2.5L1.6 7C.6 9 0 11.2 0 13.5s.6 4.5 1.6 6.5l3.7-2.9z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 24c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.1-6.7-5l-3.7 2.8C3.5 20.9 7.4 24 12 24z"
-                  />
-                </svg>
-                <span>Login with Google</span>
-              </button>
-
-              {/* Button 2: Main Login Pill Button */}
+              {/* Main Login Pill Button */}
               <button
                 type="submit"
                 disabled={isLoading}

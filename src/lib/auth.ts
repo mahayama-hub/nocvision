@@ -431,8 +431,7 @@ export function authenticateNocUser(
     (acc) =>
       acc.status === "active" &&
       (acc.username.toLowerCase() === cleanId ||
-        acc.email.toLowerCase() === cleanId ||
-        acc.fullName.toLowerCase() === cleanId) &&
+        acc.email.toLowerCase() === cleanId) &&
       verifyPassword(passwordInput, acc)
   );
 

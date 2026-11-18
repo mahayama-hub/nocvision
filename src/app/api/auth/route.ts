@@ -8,6 +8,7 @@ import {
   SESSION_COOKIE_NAME,
   verifySessionToken,
 } from "@/lib/auth";
+import { recordAuthAccessLog, reportCyberThreat } from "@/lib/alerting";
 
 function isHttpsRequest(req: NextRequest): boolean {
   return (
@@ -42,10 +43,42 @@ export async function POST(req: NextRequest) {
       return res;
     }
 
+    const username = (typeof body.username === "string" ? body.username : "").trim();
+    const password = typeof body.password === "string" ? body.password : "";
+    if (!username || !password) {
+      return NextResponse.json(
+        { ok: false, error: "Username/Email dan Password wajib diisi." },
+        { status: 400 }
+      );
+    }
+
     const clientIp =
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
-    const rate = checkLoginRateLimit(clientIp);
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      req.headers.get("x-real-ip")?.trim() ||
+      "local";
+    const userAgent = req.headers.get("user-agent") || "unknown";
+    const rateKey = `${clientIp}:${username.toLowerCase()}`;
+    const rateIp = checkLoginRateLimit(clientIp);
+    const rateAccount = checkLoginRateLimit(rateKey);
+    const rate = !rateIp.allowed ? rateIp : rateAccount;
     if (!rate.allowed) {
+      recordAuthAccessLog({
+        username,
+        sourceIp: clientIp,
+        userAgent,
+        outcome: "blocked_bruteforce",
+        reason: `Diblokir rate limiter (${rate.retryAfterSeconds}s)`,
+      });
+      void reportCyberThreat({
+        severity: "high",
+        category: "brute_force",
+        sourceIp: clientIp,
+        target: username,
+        summary: `Terdeteksi percobaan brute-force login berulang terhadap akun '${username}'.`,
+        mitigationAction: `Akun/IP diblokir sementara selama ${rate.retryAfterSeconds} detik oleh Rate Limiter. Evaluasi blokir IP ${clientIp} di firewall.`,
+        triggeredBy: "Auth Guard",
+      }).catch(() => {});
+
       return NextResponse.json(
         {
           ok: false,
@@ -55,12 +88,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const username = (body.username as string) || "";
-    const password = (body.password as string) || "";
-
     const user = authenticateNocUser(username, password);
     if (!user) {
       recordLoginFailure(clientIp);
+      recordLoginFailure(rateKey);
+      recordAuthAccessLog({
+        username,
+        sourceIp: clientIp,
+        userAgent,
+        outcome: "failed",
+        reason: "Username/Email atau Password salah",
+      });
       return NextResponse.json(
         {
           ok: false,
@@ -72,6 +110,15 @@ export async function POST(req: NextRequest) {
     }
 
     clearLoginFailures(clientIp);
+    clearLoginFailures(rateKey);
+    recordAuthAccessLog({
+      username: user.username,
+      role: user.role,
+      sourceIp: clientIp,
+      userAgent,
+      outcome: "success",
+      reason: "Autentikasi berhasil & sesi diterbitkan",
+    });
     const token = createSessionToken(user);
     const res = NextResponse.json({ ok: true, user });
     res.cookies.set(SESSION_COOKIE_NAME, token, {

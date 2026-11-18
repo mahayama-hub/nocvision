@@ -6,6 +6,8 @@ import { NocUser } from "@/lib/auth";
 import {
   AlertDeliveryLog,
   AlertingConfigPublic,
+  AuthAccessLog,
+  CyberThreatEvent,
   WhatsAppBotProvider,
 } from "@/lib/types";
 import {
@@ -14,6 +16,7 @@ import {
   MessageCircle,
   Save,
   Send,
+  ShieldAlert,
   ShieldCheck,
   Trash2,
   XCircle,
@@ -72,11 +75,16 @@ export default function AlertingCenter({
     notifyOnOffline: true,
     notifyOnWarning: false,
     notifyOnRecovery: true,
+    notifyOnCyberThreat: true,
+    notifyOnAuthActivity: true,
   });
 
   const [telegramBotTokenInput, setTelegramBotTokenInput] = useState("");
   const [whatsappTokenInput, setWhatsappTokenInput] = useState("");
   const [logs, setLogs] = useState<AlertDeliveryLog[]>([]);
+  const [cyberThreats, setCyberThreats] = useState<CyberThreatEvent[]>([]);
+  const [authAccessLogs, setAuthAccessLogs] = useState<AuthAccessLog[]>([]);
+  const [testingCyber, setTestingCyber] = useState(false);
 
   useEffect(() => {
     const loadAlerting = async () => {
@@ -86,6 +94,8 @@ export default function AlertingCenter({
         if (res.ok && data.config) {
           setConfig(data.config);
           setLogs(Array.isArray(data.logs) ? data.logs : []);
+          setCyberThreats(Array.isArray(data.cyberThreats) ? data.cyberThreats : []);
+          setAuthAccessLogs(Array.isArray(data.authAccessLogs) ? data.authAccessLogs : []);
         }
       } catch {
         onNotify("Gagal memuat konfigurasi Alerting.");
@@ -118,6 +128,8 @@ export default function AlertingCenter({
           notifyOnOffline: config.notifyOnOffline,
           notifyOnWarning: config.notifyOnWarning,
           notifyOnRecovery: config.notifyOnRecovery,
+          notifyOnCyberThreat: config.notifyOnCyberThreat,
+          notifyOnAuthActivity: config.notifyOnAuthActivity,
         }),
       });
       const data = await res.json();
@@ -192,6 +204,42 @@ export default function AlertingCenter({
       }
     } catch {
       onNotify("Gagal membersihkan riwayat alert.");
+    }
+  };
+
+  const handleTestCyberAlert = async () => {
+    if (!canEdit) return;
+    setTestingCyber(true);
+    try {
+      const res = await fetch("/api/alerting", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "test_cyber_alert" }),
+      });
+      const data = await res.json();
+      if (Array.isArray(data.logs)) setLogs(data.logs);
+      if (Array.isArray(data.cyberThreats)) setCyberThreats(data.cyberThreats);
+      onNotify(
+        res.ok
+          ? "Simulasi ancaman cyber dicatat & dikirim ke saluran alerting aktif."
+          : data.error || "Gagal menjalankan simulasi cyber alert."
+      );
+    } finally {
+      setTestingCyber(false);
+    }
+  };
+
+  const handleMitigateThreat = async (threatId: string) => {
+    if (!canEdit) return;
+    const res = await fetch("/api/alerting", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "mitigate_threat", threatId }),
+    });
+    const data = await res.json();
+    if (res.ok && Array.isArray(data.cyberThreats)) {
+      setCyberThreats(data.cyberThreats);
+      onNotify("Status ancaman cyber ditandai telah dimitigasi.");
     }
   };
 
@@ -458,7 +506,7 @@ export default function AlertingCenter({
         <h4 className={`text-sm font-bold ${headingText} mb-3`}>
           Aturan Pemicu Notifikasi Otomatis
         </h4>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           {[
             {
               key: "notifyOnCritical" as const,
@@ -479,6 +527,16 @@ export default function AlertingCenter({
               key: "notifyOnRecovery" as const,
               label: "Recovery / Resolved",
               desc: "Saat insiden selesai ditangani",
+            },
+            {
+              key: "notifyOnCyberThreat" as const,
+              label: "Ancaman Cyber",
+              desc: "Brute-force, DDoS spike, BGP flap",
+            },
+            {
+              key: "notifyOnAuthActivity" as const,
+              label: "Log Login & IP",
+              desc: "Semua login masuk & percobaan paksa",
             },
           ].map((rule) => (
             <label
@@ -501,6 +559,170 @@ export default function AlertingCenter({
             </label>
           ))}
         </div>
+      </div>
+
+      {/* Cyber Threat & Defensive Security Monitor */}
+      <div className={`${cardSurface} p-6`}>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div>
+            <h4 className={`text-sm font-bold ${headingText} flex items-center gap-2`}>
+              <ShieldAlert className="w-4 h-4 text-rose-400" />
+              Cyber Threat &amp; Defensive Security Monitor ({cyberThreats.filter((t) => t.status === "active").length} Aktif)
+            </h4>
+            <p className={`text-[11px] ${mutedText}`}>
+              Deteksi otomatis brute-force login, lonjakan DDoS trafik jaringan, dan anomali BGP flap dengan rekomendasi mitigasi cepat.
+            </p>
+          </div>
+          {canEdit && (
+            <button
+              type="button"
+              disabled={testingCyber}
+              onClick={handleTestCyberAlert}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                isLightCard
+                  ? "bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700"
+                  : "bg-rose-500/15 hover:bg-rose-500/25 border-rose-400/30 text-rose-300"
+              }`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+              {testingCyber ? "Menguji..." : "Tes Alert Cyber"}
+            </button>
+          )}
+        </div>
+
+        {cyberThreats.length === 0 ? (
+          <div className={`p-6 rounded-2xl border text-center text-xs ${subBoxCls} ${mutedText}`}>
+            Tidak ada ancaman serangan siber yang terdeteksi. Sistem pertahanan aktif memantau autentikasi &amp; telemetri.
+          </div>
+        ) : (
+          <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+            {cyberThreats.map((threat) => (
+              <div
+                key={threat.id}
+                className={`p-3.5 rounded-2xl border flex flex-wrap items-start justify-between gap-3 text-xs ${subBoxCls}`}
+              >
+                <div className="space-y-1 min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold uppercase ${
+                        threat.severity === "critical"
+                          ? "bg-rose-500/20 text-rose-400 border border-rose-500/30"
+                          : "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                      }`}
+                    >
+                      {threat.severity} · {threat.category}
+                    </span>
+                    <span className={`font-mono text-[11px] ${headingText}`}>
+                      IP: {threat.sourceIp} &rarr; {threat.target}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        threat.status === "mitigated"
+                          ? "bg-emerald-500/15 text-emerald-400"
+                          : "bg-rose-500/15 text-rose-400"
+                      }`}
+                    >
+                      {threat.status === "mitigated" ? "TERMITIGASI" : "AKTIF"}
+                    </span>
+                  </div>
+                  <p className={mutedText}>{threat.summary}</p>
+                  <p className="text-[11px] font-mono text-cyan-400">
+                    Mitigasi: {threat.mitigationAction}
+                  </p>
+                </div>
+
+                {canEdit && threat.status === "active" && (
+                  <button
+                    type="button"
+                    onClick={() => handleMitigateThreat(threat.id)}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 text-[11px] font-bold cursor-pointer shrink-0"
+                  >
+                    Tandai Mitigasi
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Auth Access & Intrusion Attempt Log */}
+      <div className={`${cardSurface} p-6`}>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div>
+            <h4 className={`text-sm font-bold ${headingText} flex items-center gap-2`}>
+              <ShieldCheck className="w-4 h-4 text-cyan-400" />
+              Log Akses Masuk &amp; Percobaan Login Paksa ({authAccessLogs.length})
+            </h4>
+            <p className={`text-[11px] ${mutedText}`}>
+              Mencatat semua akun terdaftar yang berhasil masuk maupun IP yang gagal / memaksa masuk ke NOCVISION.
+            </p>
+          </div>
+          {canEdit && authAccessLogs.length > 0 && (
+            <button
+              type="button"
+              onClick={async () => {
+                const res = await fetch("/api/alerting", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ action: "clear_auth_logs" }),
+                });
+                if (res.ok) {
+                  setAuthAccessLogs([]);
+                  onNotify("Log akses login dibersihkan.");
+                }
+              }}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 cursor-pointer ${subBoxCls} ${mutedText}`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Bersihkan Log Akses
+            </button>
+          )}
+        </div>
+
+        {authAccessLogs.length === 0 ? (
+          <div className={`p-6 rounded-2xl border text-center text-xs ${subBoxCls} ${mutedText}`}>
+            Belum ada catatan percobaan login yang terekam.
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+            {authAccessLogs.map((entry) => (
+              <div
+                key={entry.id}
+                className={`p-3 rounded-xl border flex flex-wrap items-center justify-between gap-2 text-xs ${subBoxCls}`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold uppercase shrink-0 ${
+                      entry.outcome === "success"
+                        ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                        : entry.outcome === "blocked_bruteforce"
+                        ? "bg-rose-500/20 text-rose-400 border border-rose-500/30"
+                        : "bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                    }`}
+                  >
+                    {entry.outcome === "success"
+                      ? "MASUK"
+                      : entry.outcome === "blocked_bruteforce"
+                      ? "PAKSA / BLOKIR"
+                      : "GAGAL"}
+                  </span>
+                  <div className="min-w-0">
+                    <div className={`font-bold truncate ${headingText}`}>
+                      Akun: {entry.username}{entry.role ? ` (${entry.role})` : ""} · IP: {entry.sourceIp}
+                    </div>
+                    <div className={`text-[11px] truncate ${mutedText}`}>
+                      {entry.reason} · {entry.userAgent}
+                    </div>
+                  </div>
+                </div>
+                <span className={`text-[10px] font-mono ${mutedText}`}>
+                  {new Date(entry.timestamp).toLocaleString("id-ID")}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Delivery Logs */}

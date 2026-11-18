@@ -1,7 +1,9 @@
 import { execFile } from "child_process";
+import * as dgram from "dgram";
 import * as net from "net";
 import * as dns from "dns";
 import { promisify } from "util";
+import { NetworkInterface } from "./types";
 
 const execFileAsync = promisify(execFile);
 const dnsLookup = promisify(dns.lookup);
@@ -223,4 +225,617 @@ export async function executeDnsDiagnostic(hostInput: string): Promise<string> {
 
   return lines.join("\n");
 }
+
+function encodeBerLength(len: number): Buffer {
+  if (len < 128) return Buffer.from([len]);
+  const bytes: number[] = [];
+  let n = len;
+  while (n > 0) {
+    bytes.unshift(n & 0xff);
+    n >>= 8;
+  }
+  return Buffer.from([0x80 | bytes.length, ...bytes]);
+}
+
+function encodeTlv(tag: number, content: Buffer): Buffer {
+  return Buffer.concat([Buffer.from([tag]), encodeBerLength(content.length), content]);
+}
+
+function encodeOid(oid: number[]): Buffer {
+  const out: number[] = [oid[0] * 40 + oid[1]];
+  for (let i = 2; i < oid.length; i++) {
+    let val = oid[i];
+    if (val === 0) {
+      out.push(0);
+      continue;
+    }
+    const parts: number[] = [];
+    while (val > 0) {
+      parts.unshift(val & 0x7f);
+      val >>= 7;
+    }
+    for (let j = 0; j < parts.length - 1; j++) {
+      parts[j] |= 0x80;
+    }
+    out.push(...parts);
+  }
+  return encodeTlv(0x06, Buffer.from(out));
+}
+
+function formatSysUpTime(centiseconds: number): string {
+  const totalSec = Math.floor(centiseconds / 100);
+  const days = Math.floor(totalSec / 86400);
+  const hours = Math.floor((totalSec % 86400) / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  return `${days}d ${String(hours).padStart(2, "0")}h ${String(mins).padStart(2, "0")}m`;
+}
+
+export interface SnmpProbeResult {
+  reachable: boolean;
+  responseTimeMs: number;
+  sysDescr?: string;
+  uptime?: string;
+}
+
+/**
+ * Lightweight real SNMPv2c UDP GetRequest probe (sysDescr.0 & sysUpTime.0)
+ */
+export async function probeSnmpSysInfo(
+  hostInput: string,
+  community = "public",
+  port = 161,
+  timeoutMs = 900
+): Promise<SnmpProbeResult> {
+  const host = sanitizeHost(hostInput);
+  const safePort = Math.min(Math.max(Math.floor(port) || 161, 1), 65535);
+  const safeCommunity = (community || "public").slice(0, 64);
+  const start = Date.now();
+
+  const vb1 = encodeTlv(0x30, Buffer.concat([encodeOid([1, 3, 6, 1, 2, 1, 1, 1, 0]), Buffer.from([0x05, 0x00])]));
+  const vb2 = encodeTlv(0x30, Buffer.concat([encodeOid([1, 3, 6, 1, 2, 1, 1, 3, 0]), Buffer.from([0x05, 0x00])]));
+  const reqId = Buffer.from([0x02, 0x02, 0x1a, 0x2b]);
+  const errStat = Buffer.from([0x02, 0x01, 0x00]);
+  const errIdx = Buffer.from([0x02, 0x01, 0x00]);
+  const pdu = encodeTlv(0xa0, Buffer.concat([reqId, errStat, errIdx, encodeTlv(0x30, Buffer.concat([vb1, vb2]))]));
+  const packet = encodeTlv(
+    0x30,
+    Buffer.concat([
+      Buffer.from([0x02, 0x01, 0x01]), // version = 1 (SNMPv2c)
+      encodeTlv(0x04, Buffer.from(safeCommunity, "utf8")),
+      pdu,
+    ])
+  );
+
+  return new Promise((resolve) => {
+    const socket = dgram.createSocket(net.isIPv6(host) ? "udp6" : "udp4");
+    let settled = false;
+
+    const done = (res: SnmpProbeResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket.close();
+      } catch {
+        // Ignore close errors
+      }
+      resolve(res);
+    };
+
+    const timer = setTimeout(() => {
+      done({ reachable: false, responseTimeMs: Date.now() - start });
+    }, timeoutMs);
+
+    socket.on("error", () => {
+      done({ reachable: false, responseTimeMs: Date.now() - start });
+    });
+
+    socket.on("message", (msg) => {
+      let sysDescr: string | undefined;
+      let uptime: string | undefined;
+
+      // Scan response buffer for OctetString (0x04) sysDescr and TimeTicks (0x43) sysUpTime
+      for (let i = 0; i < msg.length - 4; i++) {
+        if (!sysDescr && msg[i] === 0x04 && msg[i + 1] > 8 && msg[i + 1] < 120 && i + 2 + msg[i + 1] <= msg.length) {
+          const candidate = msg.subarray(i + 2, i + 2 + msg[i + 1]).toString("utf8");
+          if (candidate !== safeCommunity && /^[\x20-\x7e]+$/.test(candidate)) {
+            sysDescr = candidate.trim();
+          }
+        }
+        if (!uptime && msg[i] === 0x43 && msg[i + 1] >= 1 && msg[i + 1] <= 4 && i + 2 + msg[i + 1] <= msg.length) {
+          let ticks = 0;
+          for (let j = 0; j < msg[i + 1]; j++) {
+            ticks = (ticks << 8) | msg[i + 2 + j];
+          }
+          uptime = formatSysUpTime(ticks >>> 0);
+        }
+      }
+
+      done({
+        reachable: true,
+        responseTimeMs: Date.now() - start,
+        sysDescr,
+        uptime,
+      });
+    });
+
+    socket.send(packet, safePort, host);
+  });
+}
+
+export interface RealtimeDevicePoll {
+  alive: boolean;
+  status: "online" | "warning" | "offline";
+  latencyMs: number;
+  packetLossPct: number;
+  pingResult: PingResult;
+  sshResult: TcpProbeResult;
+  apiResult: TcpProbeResult;
+  snmpResult: SnmpProbeResult;
+}
+
+export async function pollDeviceRealtime(params: {
+  ipAddress: string;
+  sshPort?: number;
+  apiPort?: number;
+  snmpPort?: number;
+  snmpCommunity?: string;
+}): Promise<RealtimeDevicePoll> {
+  const [pingResult, sshResult, apiResult, snmpResult] = await Promise.all([
+    executeRealPing(params.ipAddress, 2),
+    probeTcpPort(params.ipAddress, params.sshPort || 22, "SSH", 900),
+    probeTcpPort(params.ipAddress, params.apiPort || 80, "API/HTTP", 900),
+    probeSnmpSysInfo(params.ipAddress, params.snmpCommunity || "public", params.snmpPort || 161, 900),
+  ]);
+
+  const alive =
+    pingResult.alive || sshResult.open || apiResult.open || snmpResult.reachable;
+
+  const latencyMs = pingResult.alive
+    ? pingResult.latencyMs
+    : snmpResult.reachable
+    ? snmpResult.responseTimeMs
+    : sshResult.open
+    ? sshResult.responseTimeMs
+    : apiResult.open
+    ? apiResult.responseTimeMs
+    : 0;
+
+  const packetLossPct = pingResult.alive
+    ? pingResult.packetLossPct
+    : alive
+    ? 0
+    : 100;
+
+  const status: "online" | "warning" | "offline" = !alive
+    ? "offline"
+    : packetLossPct > 0 || latencyMs > 120
+    ? "warning"
+    : "online";
+
+  return {
+    alive,
+    status,
+    latencyMs,
+    packetLossPct,
+    pingResult,
+    sshResult,
+    apiResult,
+    snmpResult,
+  };
+}
+
+function readBerLength(buf: Buffer, offset: number): { length: number; next: number } | null {
+  if (offset >= buf.length) return null;
+  const first = buf[offset];
+  if ((first & 0x80) === 0) {
+    return { length: first, next: offset + 1 };
+  }
+  const numBytes = first & 0x7f;
+  if (numBytes === 0 || numBytes > 4 || offset + 1 + numBytes > buf.length) return null;
+  let len = 0;
+  for (let i = 0; i < numBytes; i++) {
+    len = (len << 8) | buf[offset + 1 + i];
+  }
+  return { length: len, next: offset + 1 + numBytes };
+}
+
+function decodeOid(buf: Buffer): number[] {
+  if (buf.length === 0) return [];
+  const first = buf[0];
+  const oid: number[] = [Math.floor(first / 40), first % 40];
+  let val = 0;
+  for (let i = 1; i < buf.length; i++) {
+    val = (val << 7) | (buf[i] & 0x7f);
+    if ((buf[i] & 0x80) === 0) {
+      oid.push(val);
+      val = 0;
+    }
+  }
+  return oid;
+}
+
+function decodeSnmpInt(buf: Buffer): number {
+  let val = 0;
+  for (let i = 0; i < buf.length; i++) {
+    val = (val << 8) | buf[i];
+  }
+  return val >>> 0;
+}
+
+function decodeSnmpSignedInt(buf: Buffer): number {
+  if (buf.length === 0) return 0;
+  let val = (buf[0] & 0x80) !== 0 ? -1 : 0;
+  for (let i = 0; i < buf.length; i++) {
+    val = (val << 8) | buf[i];
+  }
+  return val;
+}
+
+function decodeSnmpCounter64(buf: Buffer): number {
+  let val = 0;
+  for (let i = 0; i < buf.length; i++) {
+    val = val * 256 + buf[i];
+  }
+  return val;
+}
+
+function parseFirstVarbind(msg: Buffer): { oid: number[]; tag: number; valBuf: Buffer } | null {
+  let pos = 0;
+  if (msg[pos++] !== 0x30) return null;
+  const topLen = readBerLength(msg, pos);
+  if (!topLen) return null;
+  pos = topLen.next;
+
+  // version + community
+  for (let i = 0; i < 2; i++) {
+    pos++;
+    const l = readBerLength(msg, pos);
+    if (!l) return null;
+    pos = l.next + l.length;
+  }
+
+  // GetResponse PDU (0xa2)
+  if (pos >= msg.length || msg[pos++] !== 0xa2) return null;
+  const pduLen = readBerLength(msg, pos);
+  if (!pduLen) return null;
+  pos = pduLen.next;
+
+  // request-id, error-status, error-index
+  for (let i = 0; i < 3; i++) {
+    pos++;
+    const l = readBerLength(msg, pos);
+    if (!l) return null;
+    pos = l.next + l.length;
+  }
+
+  // VarBindList (0x30) -> first VarBind (0x30)
+  if (pos >= msg.length || msg[pos++] !== 0x30) return null;
+  const vblLen = readBerLength(msg, pos);
+  if (!vblLen) return null;
+  pos = vblLen.next;
+
+  if (pos >= msg.length || msg[pos++] !== 0x30) return null;
+  const vbLen = readBerLength(msg, pos);
+  if (!vbLen) return null;
+  pos = vbLen.next;
+
+  if (pos >= msg.length || msg[pos++] !== 0x06) return null;
+  const oidLen = readBerLength(msg, pos);
+  if (!oidLen) return null;
+  const oid = decodeOid(msg.subarray(oidLen.next, oidLen.next + oidLen.length));
+  pos = oidLen.next + oidLen.length;
+
+  if (pos >= msg.length) return null;
+  const tag = msg[pos++];
+  const valLen = readBerLength(msg, pos);
+  if (!valLen) return null;
+  const valBuf = msg.subarray(valLen.next, valLen.next + valLen.length);
+
+  return { oid, tag, valBuf };
+}
+
+export interface DiscoveredBgpPeer {
+  peerIp: string;
+  remoteAs: number;
+  state: "Established" | "Active" | "Idle" | "Connect";
+  uptime: string;
+}
+
+const BGP_STATE_MAP: Record<number, DiscoveredBgpPeer["state"]> = {
+  1: "Idle",
+  2: "Connect",
+  3: "Active",
+  4: "Connect",
+  5: "Connect",
+  6: "Established",
+};
+
+async function snmpWalkSubtree(
+  hostInput: string,
+  community: string,
+  port: number,
+  basePrefix: number[],
+  maxSteps = 48
+): Promise<Array<{ suffix: number[]; tag: number; valBuf: Buffer }>> {
+  const host = sanitizeHost(hostInput);
+  const safePort = Math.min(Math.max(Math.floor(port) || 161, 1), 65535);
+  const safeCommunity = (community || "public").slice(0, 64);
+
+  const sendGetNext = (
+    oid: number[],
+    reqNum: number
+  ): Promise<{ oid: number[]; tag: number; valBuf: Buffer } | null> =>
+    new Promise((resolve) => {
+      const vb = encodeTlv(
+        0x30,
+        Buffer.concat([encodeOid(oid), Buffer.from([0x05, 0x00])])
+      );
+      const reqId = Buffer.from([
+        0x02,
+        0x02,
+        (reqNum >> 8) & 0xff,
+        reqNum & 0xff,
+      ]);
+      const errStat = Buffer.from([0x02, 0x01, 0x00]);
+      const errIdx = Buffer.from([0x02, 0x01, 0x00]);
+      const pdu = encodeTlv(
+        0xa1,
+        Buffer.concat([reqId, errStat, errIdx, encodeTlv(0x30, vb)])
+      );
+      const packet = encodeTlv(
+        0x30,
+        Buffer.concat([
+          Buffer.from([0x02, 0x01, 0x01]),
+          encodeTlv(0x04, Buffer.from(safeCommunity, "utf8")),
+          pdu,
+        ])
+      );
+
+      const socket = dgram.createSocket(net.isIPv6(host) ? "udp6" : "udp4");
+      let settled = false;
+      const done = (
+        val: { oid: number[]; tag: number; valBuf: Buffer } | null
+      ) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          socket.close();
+        } catch {
+          // ignore
+        }
+        resolve(val);
+      };
+
+      const timer = setTimeout(() => done(null), 650);
+      socket.on("error", () => done(null));
+      socket.on("message", (msg) => done(parseFirstVarbind(msg)));
+      socket.send(packet, safePort, host);
+    });
+
+  const rows: Array<{ suffix: number[]; tag: number; valBuf: Buffer }> = [];
+  let currentOid = [...basePrefix];
+  let reqSeq = 200;
+
+  for (let step = 0; step < maxSteps; step++) {
+    const res = await sendGetNext(currentOid, reqSeq++);
+    if (!res || res.tag === 0x80 || res.tag === 0x81 || res.tag === 0x82) break;
+    const matchesPrefix = basePrefix.every((v, idx) => res.oid[idx] === v);
+    if (!matchesPrefix || res.oid.length <= basePrefix.length) break;
+
+    rows.push({
+      suffix: res.oid.slice(basePrefix.length),
+      tag: res.tag,
+      valBuf: res.valBuf,
+    });
+    currentOid = res.oid;
+  }
+
+  return rows;
+}
+
+/**
+ * Walks BGP4-MIB::bgpPeerTable (1.3.6.1.2.1.15.3.1) via SNMPv2c GetNextRequest
+ * to discover live BGP peer IP, Remote AS, FSM State, and Established Time.
+ */
+export async function probeSnmpBgpPeers(
+  hostInput: string,
+  community = "public",
+  port = 161
+): Promise<DiscoveredBgpPeer[]> {
+  const peers = new Map<string, DiscoveredBgpPeer>();
+  const columns: number[] = [2, 9, 16];
+
+  for (const col of columns) {
+    const rows = await snmpWalkSubtree(
+      hostInput,
+      community,
+      port,
+      [1, 3, 6, 1, 2, 1, 15, 3, 1, col],
+      32
+    );
+    for (const row of rows) {
+      if (row.suffix.length < 4) continue;
+      const peerIp = row.suffix.slice(0, 4).join(".");
+      const existing = peers.get(peerIp) || {
+        peerIp,
+        remoteAs: 0,
+        state: "Idle" as const,
+        uptime: "0d 00h 00m",
+      };
+      const numVal = decodeSnmpInt(row.valBuf);
+      if (col === 2) {
+        existing.state = BGP_STATE_MAP[numVal] || "Idle";
+      } else if (col === 9) {
+        existing.remoteAs = numVal;
+      } else if (col === 16) {
+        const d = Math.floor(numVal / 86400);
+        const h = Math.floor((numVal % 86400) / 3600);
+        const m = Math.floor((numVal % 3600) / 60);
+        existing.uptime = `${d}d ${String(h).padStart(2, "0")}h ${String(m).padStart(2, "0")}m`;
+      }
+      peers.set(peerIp, existing);
+    }
+  }
+
+  return Array.from(peers.values());
+}
+
+const ifaceCounterCache = new Map<
+  string,
+  { inOctets: number; outOctets: number; ts: number }
+>();
+
+function detectInterfaceType(name: string): NetworkInterface["type"] {
+  const lower = name.toLowerCase();
+  if (lower.includes("qsfp") || lower.startsWith("et-") || lower.includes("100g")) {
+    return "qsfp28";
+  }
+  if (
+    lower.includes("sfp+") ||
+    lower.includes("sfp-sfpplus") ||
+    lower.startsWith("xe-") ||
+    lower.includes("tengig") ||
+    lower.startsWith("te") ||
+    lower.includes("10g")
+  ) {
+    return "sfp_plus";
+  }
+  if (lower.includes("epon")) {
+    return "epon";
+  }
+  if (lower.includes("gpon") || lower.includes("pon")) {
+    return "gpon";
+  }
+  if (lower.includes("sfp") || lower.includes("fiber") || lower.includes("opt")) {
+    return "sfp_plus";
+  }
+  if (lower.includes("vlan") || lower.includes("bridge") || lower.includes("lo")) {
+    return "vlan";
+  }
+  return "ethernet";
+}
+
+function normalizeSfpDbm(raw: number): number {
+  // MikroTik / standard DDM often reports in 0.001 dBm (e.g. -18500 -> -18.50) or 0.01 dBm (e.g. -1850 -> -18.50)
+  if (Math.abs(raw) > 500) return Number((raw / 1000).toFixed(2));
+  if (Math.abs(raw) > 60) return Number((raw / 100).toFixed(2));
+  return Number(raw.toFixed(2));
+}
+
+/**
+ * Walks IF-MIB (ifDescr, ifSpeed/ifHighSpeed, ifOperStatus, ifHCInOctets/ifInOctets, ifHCOutOctets/ifOutOctets)
+ * and SFP DDM optical power (MIKROTIK-MIB mtxrOpticalRxPower / mtxrOpticalTxPower) to return pure interfaces + real TX/RX Mbps.
+ */
+export async function probeSnmpInterfaces(
+  hostInput: string,
+  community = "public",
+  port = 161,
+  deviceId = "dev"
+): Promise<NetworkInterface[]> {
+  const host = sanitizeHost(hostInput);
+  const nowMs = Date.now();
+
+  const [
+    descrRows,
+    operRows,
+    speedRows,
+    highSpeedRows,
+    hcInRows,
+    hcOutRows,
+    in32Rows,
+    out32Rows,
+    sfpRxRows,
+    sfpTxRows,
+  ] = await Promise.all([
+    snmpWalkSubtree(host, community, port, [1, 3, 6, 1, 2, 1, 2, 2, 1, 2], 64),
+    snmpWalkSubtree(host, community, port, [1, 3, 6, 1, 2, 1, 2, 2, 1, 8], 64),
+    snmpWalkSubtree(host, community, port, [1, 3, 6, 1, 2, 1, 2, 2, 1, 5], 64),
+    snmpWalkSubtree(host, community, port, [1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 15], 64),
+    snmpWalkSubtree(host, community, port, [1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 6], 64),
+    snmpWalkSubtree(host, community, port, [1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 10], 64),
+    snmpWalkSubtree(host, community, port, [1, 3, 6, 1, 2, 1, 2, 2, 1, 10], 64),
+    snmpWalkSubtree(host, community, port, [1, 3, 6, 1, 2, 1, 2, 2, 1, 16], 64),
+    snmpWalkSubtree(host, community, port, [1, 3, 6, 1, 4, 1, 14988, 1, 1, 19, 1, 1, 9], 32),
+    snmpWalkSubtree(host, community, port, [1, 3, 6, 1, 4, 1, 14988, 1, 1, 19, 1, 1, 10], 32),
+  ]);
+
+  if (descrRows.length === 0) return [];
+
+  const toMap = <T,>(
+    rows: Array<{ suffix: number[]; valBuf: Buffer }>,
+    fn: (b: Buffer) => T
+  ) => {
+    const m = new Map<number, T>();
+    for (const r of rows) {
+      if (r.suffix.length >= 1) m.set(r.suffix[0], fn(r.valBuf));
+    }
+    return m;
+  };
+
+  const operMap = toMap(operRows, decodeSnmpInt);
+  const speedMap = toMap(speedRows, decodeSnmpInt);
+  const highSpeedMap = toMap(highSpeedRows, decodeSnmpInt);
+  const hcInMap = toMap(hcInRows, decodeSnmpCounter64);
+  const hcOutMap = toMap(hcOutRows, decodeSnmpCounter64);
+  const in32Map = toMap(in32Rows, decodeSnmpInt);
+  const out32Map = toMap(out32Rows, decodeSnmpInt);
+  const sfpRxMap = toMap(sfpRxRows, decodeSnmpSignedInt);
+  const sfpTxMap = toMap(sfpTxRows, decodeSnmpSignedInt);
+
+  const interfaces: NetworkInterface[] = [];
+
+  for (const row of descrRows) {
+    if (row.suffix.length < 1) continue;
+    const ifIdx = row.suffix[0];
+    const name = row.valBuf.toString("utf8").trim();
+    if (!name || name.toLowerCase() === "lo" || name.toLowerCase() === "lo0") continue;
+
+    const oper = operMap.get(ifIdx);
+    const status: NetworkInterface["status"] = oper === 1 ? "up" : "down";
+    const highMbps = highSpeedMap.get(ifIdx) || 0;
+    const speedMbps =
+      highMbps > 0 ? highMbps : Math.round((speedMap.get(ifIdx) || 1_000_000_000) / 1_000_000);
+
+    const inOctets = hcInMap.get(ifIdx) ?? in32Map.get(ifIdx) ?? 0;
+    const outOctets = hcOutMap.get(ifIdx) ?? out32Map.get(ifIdx) ?? 0;
+    const cacheKey = `${host}:${ifIdx}`;
+    const prev = ifaceCounterCache.get(cacheKey);
+
+    let rxMbps = 0;
+    let txMbps = 0;
+    if (prev && nowMs > prev.ts && status === "up") {
+      const dtSec = (nowMs - prev.ts) / 1000;
+      const dIn = inOctets >= prev.inOctets ? inOctets - prev.inOctets : 0;
+      const dOut = outOctets >= prev.outOctets ? outOctets - prev.outOctets : 0;
+      rxMbps = Number((((dIn * 8) / dtSec) / 1_000_000).toFixed(2));
+      txMbps = Number((((dOut * 8) / dtSec) / 1_000_000).toFixed(2));
+    }
+    ifaceCounterCache.set(cacheKey, { inOctets, outOctets, ts: nowMs });
+
+    const ifaceType = detectInterfaceType(name);
+    const rawRxDbm = sfpRxMap.get(ifIdx);
+    const rawTxDbm = sfpTxMap.get(ifIdx);
+
+    interfaces.push({
+      id: `if-${deviceId}-${ifIdx}`,
+      name,
+      description: `IF-MIB #${ifIdx}`,
+      type: ifaceType,
+      status,
+      speedMbps,
+      rxMbps,
+      txMbps,
+      rxPowerDbm: typeof rawRxDbm === "number" ? normalizeSfpDbm(rawRxDbm) : undefined,
+      txPowerDbm: typeof rawTxDbm === "number" ? normalizeSfpDbm(rawTxDbm) : undefined,
+      crcErrors: 0,
+      drops: 0,
+    });
+  }
+
+  return interfaces;
+}
+
+
 

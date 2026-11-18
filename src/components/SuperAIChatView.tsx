@@ -49,6 +49,73 @@ interface SuperAIChatViewProps {
   onNavigateTab?: (tab: "troubleshoot" | "backup" | "bgp") => void;
 }
 
+function renderInlineMarkdown(text: string, isLightCard: boolean): React.ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  return parts.map((part, idx) => {
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return (
+        <strong
+          key={idx}
+          className={`font-semibold ${isLightCard ? "text-slate-900" : "text-white"}`}
+        >
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
+      return (
+        <code
+          key={idx}
+          className={`px-1.5 py-0.5 rounded-md font-mono text-[11px] ${
+            isLightCard
+              ? "bg-slate-200/80 text-sky-700"
+              : "bg-cyan-500/15 text-cyan-300"
+          }`}
+        >
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    return <React.Fragment key={idx}>{part}</React.Fragment>;
+  });
+}
+
+function renderFormattedAiContent(
+  text: string,
+  isLightCard: boolean,
+  isUser: boolean
+): React.ReactNode {
+  if (isUser) {
+    return <p className="text-[13px] leading-relaxed whitespace-pre-line">{text}</p>;
+  }
+
+  const lines = text.split(/\r?\n/);
+  return (
+    <div className="space-y-1.5 text-[13px] leading-relaxed">
+      {lines.map((rawLine, idx) => {
+        const line = rawLine.trim();
+        if (!line) return <div key={idx} className="h-1" />;
+
+        const bulletMatch = line.match(/^(?:[-*•]|\d+\.)\s+(.*)$/);
+        if (bulletMatch) {
+          return (
+            <div key={idx} className="flex items-start gap-2.5 pl-0.5">
+              <span
+                className={`mt-2 w-1.5 h-1.5 rounded-full shrink-0 ${
+                  isLightCard ? "bg-sky-500" : "bg-cyan-400"
+                }`}
+              />
+              <p className="flex-1">{renderInlineMarkdown(bulletMatch[1], isLightCard)}</p>
+            </div>
+          );
+        }
+
+        return <p key={idx}>{renderInlineMarkdown(line, isLightCard)}</p>;
+      })}
+    </div>
+  );
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -1048,7 +1115,17 @@ export default function SuperAIChatView({
                       </div>
                     )}
 
-                    <div className="text-xs leading-relaxed whitespace-pre-line">{msg.content}</div>
+                    {msg.role === "assistant" && msg.title && (
+                      <h4
+                        className={`text-sm font-bold tracking-tight ${
+                          isLightCard ? "text-slate-900" : "text-white"
+                        }`}
+                      >
+                        {msg.title}
+                      </h4>
+                    )}
+
+                    {renderFormattedAiContent(msg.content, isLightCard, msg.role === "user")}
 
                     {msg.metrics && msg.metrics.length > 0 && (
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">

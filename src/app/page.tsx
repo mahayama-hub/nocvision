@@ -103,6 +103,13 @@ export default function NocVisionDashboard() {
   const [deviceSearch, setDeviceSearch] = useState<string>("");
   const [pollingDeviceId, setPollingDeviceId] = useState<string | null>(null);
   const [pollToast, setPollToast] = useState<string | null>(null);
+  const [bgpSyncing, setBgpSyncing] = useState<boolean>(false);
+  const [showAddBgpForm, setShowAddBgpForm] = useState<boolean>(false);
+  const [bgpFormDeviceId, setBgpFormDeviceId] = useState<string>("");
+  const [bgpFormPeerName, setBgpFormPeerName] = useState<string>("");
+  const [bgpFormPeerIp, setBgpFormPeerIp] = useState<string>("");
+  const [bgpFormRemoteAs, setBgpFormRemoteAs] = useState<string>("");
+  const [bgpFormType, setBgpFormType] = useState<"Upstream" | "IXP" | "Peering" | "iBGP">("Upstream");
   const [selectedBgpPeerId, setSelectedBgpPeerId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -148,9 +155,10 @@ export default function NocVisionDashboard() {
 
   useEffect(() => {
     if (!currentUser || !autoRefresh) return;
+    const canSync = currentUser.permissions.includes("refresh_sync");
     const timer = setInterval(() => {
-      fetchNocState(true, false);
-    }, 5000);
+      fetchNocState(canSync, canSync);
+    }, 8000);
     return () => clearInterval(timer);
   }, [currentUser, autoRefresh, fetchNocState]);
 
@@ -1309,13 +1317,183 @@ export default function NocVisionDashboard() {
                   BGP Routing Sessions &amp; Upstream / IXP Peering Telemetry
                 </h3>
                 <p className={`text-xs ${pageMuted} mt-0.5`}>
-                  Monitoring sesi BGP pada Juniper MX204, MikroTik CCR2116, dan Cisco ASR1001
+                  Auto-discovery BGP4-MIB (SNMPv2c) atau pendaftaran manual sesi BGP pada router aktif
                 </p>
               </div>
-              <span className="px-3 py-1 rounded-full text-xs font-mono bg-emerald-500/15 text-emerald-500 border border-emerald-500/30">
-                {bgpPeers.length}/{bgpPeers.length} Sessions Established
-              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="px-3 py-1 rounded-full text-xs font-mono bg-emerald-500/15 text-emerald-500 border border-emerald-500/30">
+                  {bgpPeers.filter((p) => p.state === "Established").length}/{bgpPeers.length} Sessions Established
+                </span>
+                {currentUser.permissions.includes("manage_devices") && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={bgpSyncing}
+                      onClick={async () => {
+                        setBgpSyncing(true);
+                        try {
+                          const res = await fetch("/api/noc", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ action: "sync_bgp_snmp" }),
+                          });
+                          const data = await res.json();
+                          if (res.ok && data.state) {
+                            setNocState(data.state as NocState);
+                            showToast(
+                              data.syncedCount > 0
+                                ? `Sinkronisasi SNMP BGP4-MIB berhasil (${data.syncedCount} peer terbaca).`
+                                : "Tidak ada tabel BGP4-MIB yang terbaca via SNMP dari router aktif."
+                            );
+                          } else {
+                            showToast(data.error || "Gagal sinkronisasi BGP via SNMP.");
+                          }
+                        } finally {
+                          setBgpSyncing(false);
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                        isLightCard
+                          ? "bg-sky-50 hover:bg-sky-100 border-sky-200 text-sky-700"
+                          : "bg-cyan-500/15 hover:bg-cyan-500/25 border-cyan-400/30 text-cyan-300"
+                      }`}
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${bgpSyncing ? "animate-spin" : ""}`} />
+                      {bgpSyncing ? "Scanning SNMP..." : "Sync BGP (SNMP)"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddBgpForm((v) => !v)}
+                      className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-400 to-sky-500 text-slate-950 font-extrabold text-xs flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Tambah BGP Peer
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
+
+            {showAddBgpForm && currentUser.permissions.includes("manage_devices") && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  const res = await fetch("/api/noc", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      action: "add_bgp_peer",
+                      deviceId: bgpFormDeviceId || devices[0]?.id,
+                      peerName: bgpFormPeerName,
+                      peerIp: bgpFormPeerIp,
+                      remoteAs: Number(bgpFormRemoteAs),
+                      type: bgpFormType,
+                    }),
+                  });
+                  const data = await res.json();
+                  if (!res.ok) {
+                    showToast(data.error || "Gagal menambah BGP peer.");
+                    return;
+                  }
+                  setNocState(data.state as NocState);
+                  setBgpFormPeerName("");
+                  setBgpFormPeerIp("");
+                  setBgpFormRemoteAs("");
+                  setShowAddBgpForm(false);
+                  showToast("BGP Peer berhasil ditambahkan.");
+                }}
+                className={`p-4 rounded-2xl border grid grid-cols-1 sm:grid-cols-6 gap-2.5 items-end ${
+                  isLightCard ? "bg-slate-50 border-slate-200" : "bg-[#040e21]/80 border-sky-500/20"
+                }`}
+              >
+                <div className="sm:col-span-1">
+                  <label className={`block text-[10px] font-semibold mb-1 ${pageMuted}`}>Router</label>
+                  <select
+                    value={bgpFormDeviceId || devices[0]?.id || ""}
+                    onChange={(e) => setBgpFormDeviceId(e.target.value)}
+                    className={`w-full px-2.5 py-2 rounded-xl border text-xs ${
+                      isLightCard ? "bg-white border-slate-300 text-slate-900" : "bg-[#040d1d] border-sky-500/25 text-white"
+                    }`}
+                  >
+                    {devices.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="sm:col-span-1">
+                  <label className={`block text-[10px] font-semibold mb-1 ${pageMuted}`}>Nama Peer</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Telkom / IXP"
+                    value={bgpFormPeerName}
+                    onChange={(e) => setBgpFormPeerName(e.target.value)}
+                    className={`w-full px-2.5 py-2 rounded-xl border text-xs ${
+                      isLightCard ? "bg-white border-slate-300 text-slate-900" : "bg-[#040d1d] border-sky-500/25 text-white"
+                    }`}
+                  />
+                </div>
+                <div className="sm:col-span-1">
+                  <label className={`block text-[10px] font-semibold mb-1 ${pageMuted}`}>Peer IP</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="103.x.x.x"
+                    value={bgpFormPeerIp}
+                    onChange={(e) => setBgpFormPeerIp(e.target.value)}
+                    className={`w-full px-2.5 py-2 rounded-xl border text-xs ${
+                      isLightCard ? "bg-white border-slate-300 text-slate-900" : "bg-[#040d1d] border-sky-500/25 text-white"
+                    }`}
+                  />
+                </div>
+                <div className="sm:col-span-1">
+                  <label className={`block text-[10px] font-semibold mb-1 ${pageMuted}`}>Remote ASN</label>
+                  <input
+                    type="number"
+                    required
+                    placeholder="7713"
+                    value={bgpFormRemoteAs}
+                    onChange={(e) => setBgpFormRemoteAs(e.target.value)}
+                    className={`w-full px-2.5 py-2 rounded-xl border text-xs ${
+                      isLightCard ? "bg-white border-slate-300 text-slate-900" : "bg-[#040d1d] border-sky-500/25 text-white"
+                    }`}
+                  />
+                </div>
+                <div className="sm:col-span-1">
+                  <label className={`block text-[10px] font-semibold mb-1 ${pageMuted}`}>Tipe</label>
+                  <select
+                    value={bgpFormType}
+                    onChange={(e) => setBgpFormType(e.target.value as "Upstream" | "IXP" | "Peering" | "iBGP")}
+                    className={`w-full px-2.5 py-2 rounded-xl border text-xs ${
+                      isLightCard ? "bg-white border-slate-300 text-slate-900" : "bg-[#040d1d] border-sky-500/25 text-white"
+                    }`}
+                  >
+                    <option value="Upstream">Upstream</option>
+                    <option value="IXP">IXP</option>
+                    <option value="Peering">Peering</option>
+                    <option value="iBGP">iBGP</option>
+                  </select>
+                </div>
+                <button
+                  type="submit"
+                  className="px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs cursor-pointer"
+                >
+                  Simpan Peer
+                </button>
+              </form>
+            )}
+
+            {bgpPeers.length === 0 ? (
+              <div
+                className={`p-8 rounded-2xl border text-center text-xs ${pageMuted} ${
+                  isLightCard ? "bg-slate-50 border-slate-200" : "bg-[#040e21]/60 border-sky-500/20"
+                }`}
+              >
+                Belum ada sesi BGP peer yang terbaca. Pastikan router memiliki SNMP aktif lalu klik <strong>Sync BGP (SNMP)</strong> atau tambahkan secara manual lewat <strong>Tambah BGP Peer</strong>.
+              </div>
+            ) : null}
 
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">

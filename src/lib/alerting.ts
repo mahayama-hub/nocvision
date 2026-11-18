@@ -3,6 +3,8 @@ import {
   AlertDeliveryLog,
   AlertingConfig,
   AlertingConfigPublic,
+  AuthAccessLog,
+  CyberThreatEvent,
   WhatsAppBotProvider,
 } from "./types";
 import { loadNocState, saveNocState } from "./noc-store";
@@ -20,6 +22,8 @@ export const DEFAULT_ALERTING_CONFIG: AlertingConfig = {
   notifyOnOffline: true,
   notifyOnWarning: false,
   notifyOnRecovery: true,
+  notifyOnCyberThreat: true,
+  notifyOnAuthActivity: true,
 };
 
 export function maskSecret(value?: string): string {
@@ -48,6 +52,8 @@ export function toPublicAlertingConfig(
     notifyOnOffline: merged.notifyOnOffline,
     notifyOnWarning: merged.notifyOnWarning,
     notifyOnRecovery: merged.notifyOnRecovery,
+    notifyOnCyberThreat: merged.notifyOnCyberThreat,
+    notifyOnAuthActivity: merged.notifyOnAuthActivity,
     updatedAt: merged.updatedAt,
   };
 }
@@ -243,7 +249,7 @@ export async function sendWhatsAppBotMessage(
 }
 
 export async function dispatchNocAlert(params: {
-  severity: "critical" | "offline" | "warning" | "recovery";
+  severity: "critical" | "offline" | "warning" | "recovery" | "cyber" | "auth";
   title: string;
   message: string;
   triggeredBy: string;
@@ -258,7 +264,9 @@ export async function dispatchNocAlert(params: {
     (params.severity === "critical" && cfg.notifyOnCritical) ||
     (params.severity === "offline" && cfg.notifyOnOffline) ||
     (params.severity === "warning" && cfg.notifyOnWarning) ||
-    (params.severity === "recovery" && cfg.notifyOnRecovery);
+    (params.severity === "recovery" && cfg.notifyOnRecovery) ||
+    (params.severity === "cyber" && cfg.notifyOnCyberThreat) ||
+    (params.severity === "auth" && cfg.notifyOnAuthActivity);
 
   if (!shouldSend) return [];
 
@@ -304,4 +312,105 @@ export async function dispatchNocAlert(params: {
     saveNocState(state);
   }
   return logs;
+}
+
+const cyberThrottleMap = new Map<string, number>();
+
+export async function reportCyberThreat(params: {
+  severity: CyberThreatEvent["severity"];
+  category: CyberThreatEvent["category"];
+  sourceIp: string;
+  target: string;
+  summary: string;
+  mitigationAction: string;
+  triggeredBy: string;
+}): Promise<CyberThreatEvent | null> {
+  const key = `${params.category}:${params.sourceIp}:${params.target}`;
+  const now = Date.now();
+  const lastSeen = cyberThrottleMap.get(key) || 0;
+  if (now - lastSeen < 2 * 60 * 1000) {
+    return null;
+  }
+  cyberThrottleMap.set(key, now);
+
+  const event: CyberThreatEvent = {
+    id: `sec-${now}-${Math.random().toString(36).slice(2, 6)}`,
+    timestamp: new Date(now).toISOString(),
+    severity: params.severity,
+    category: params.category,
+    sourceIp: params.sourceIp,
+    target: params.target,
+    summary: params.summary,
+    mitigationAction: params.mitigationAction,
+    status: "active",
+  };
+
+  const state = loadNocState();
+  state.cyberThreats = [event, ...(state.cyberThreats || [])].slice(0, 100);
+  saveNocState(state);
+
+  const msg =
+    `[NOCVISION CYBER DEFENSE - ${params.severity.toUpperCase()}]\n` +
+    `Ancaman: ${params.category.toUpperCase()}\n` +
+    `Sumber IP: ${params.sourceIp}\n` +
+    `Target: ${params.target}\n` +
+    `Detail: ${params.summary}\n` +
+    `Mitigasi: ${params.mitigationAction}`;
+
+  await dispatchNocAlert({
+    severity: "cyber",
+    title: `Cyber Threat: ${params.category}`,
+    message: msg,
+    triggeredBy: params.triggeredBy,
+  });
+
+  return event;
+}
+
+export function recordAuthAccessLog(params: {
+  username: string;
+  role?: string;
+  sourceIp: string;
+  userAgent: string;
+  outcome: AuthAccessLog["outcome"];
+  reason: string;
+}): AuthAccessLog {
+  const now = Date.now();
+  const entry: AuthAccessLog = {
+    id: `auth-${now}-${Math.random().toString(36).slice(2, 6)}`,
+    timestamp: new Date(now).toISOString(),
+    username: params.username || "(kosong)",
+    role: params.role,
+    sourceIp: params.sourceIp,
+    userAgent: params.userAgent.slice(0, 120),
+    outcome: params.outcome,
+    reason: params.reason,
+  };
+
+  const state = loadNocState();
+  state.authAccessLogs = [entry, ...(state.authAccessLogs || [])].slice(0, 200);
+  saveNocState(state);
+
+  const label =
+    params.outcome === "success"
+      ? "LOGIN BERHASIL"
+      : params.outcome === "blocked_bruteforce"
+      ? "SERANGAN PAKSA DIBLOKIR"
+      : "PERCOBAAN LOGIN GAGAL";
+
+  const msg =
+    `[NOCVISION AUTH - ${label}]\n` +
+    `Akun: ${entry.username}${entry.role ? ` (${entry.role})` : ""}\n` +
+    `IP Sumber: ${entry.sourceIp}\n` +
+    `Status: ${params.reason}\n` +
+    `Waktu: ${new Date(now).toLocaleString("id-ID")}`;
+
+  void dispatchNocAlert({
+    severity: "auth",
+    title: `${label}: ${entry.username}`,
+    message: msg,
+    triggeredBy: "Auth Access Logger",
+  }).catch(() => {});
+
+  return entry;
 }

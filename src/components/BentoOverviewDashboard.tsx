@@ -56,6 +56,7 @@ export default function BentoOverviewDashboard({
   onus,
   bgpPeers,
   incidents,
+  trafficHistory,
   selectedDeviceId,
   pollingDeviceId,
   onSelectDevice,
@@ -94,28 +95,32 @@ export default function BentoOverviewDashboard({
     coreRouters.reduce((acc, d) => acc + d.totalRxMbps, 0) / 1000
   ).toFixed(2);
 
-  const avgCpuLoad = Math.round(
-    devices.reduce((acc, d) => acc + d.cpuUsage, 0) /
-      Math.max(devices.length, 1)
-  );
+  const avgCpuLoad =
+    devices.length > 0
+      ? Math.round(devices.reduce((acc, d) => acc + d.cpuUsage, 0) / devices.length)
+      : 0;
+  const onlineDeviceCount = devices.filter((d) => d.status !== "offline").length;
+  const slaPct =
+    devices.length > 0
+      ? ((onlineDeviceCount / devices.length) * 100).toFixed(1)
+      : "0.0";
 
   const allPonPorts = olts.flatMap((o) => o.ponPorts || []);
-  const totalOnu = allPonPorts.reduce((a, p) => a + p.totalOnu, 0) || 512;
-  const onlineOnu = allPonPorts.reduce((a, p) => a + p.onlineOnu, 0) || 482;
+  const totalOnu = allPonPorts.reduce((a, p) => a + p.totalOnu, 0);
+  const onlineOnu = allPonPorts.reduce((a, p) => a + p.onlineOnu, 0);
   const losOnu = allPonPorts.reduce((a, p) => a + p.losOnu, 0);
   const dyingGaspOnu = allPonPorts.reduce((a, p) => a + p.dyingGaspOnu, 0);
   const highAttenOnu = onus.filter(
     (o) => o.status === "online" && o.rxPowerDbm <= -24.0
   ).length;
-  const onuOnlinePct = Math.min(
-    100,
-    Math.round((onlineOnu / Math.max(totalOnu, 1)) * 100)
-  );
+  const onuOnlinePct =
+    totalOnu > 0
+      ? Math.min(100, Math.round((onlineOnu / totalOnu) * 100))
+      : 0;
 
-  const rxSharePct = Math.round(
-    (totalRxMbps / Math.max(totalRxMbps + totalTxMbps, 1)) * 100
-  );
-  const txSharePct = 100 - rxSharePct;
+  const totalBwMbps = totalRxMbps + totalTxMbps;
+  const rxSharePct = totalBwMbps > 0 ? Math.round((totalRxMbps / totalBwMbps) * 100) : 0;
+  const txSharePct = totalBwMbps > 0 ? 100 - rxSharePct : 0;
 
   const selectedDevice =
     devices.find((d) => d.id === selectedDeviceId) || devices[0];
@@ -128,80 +133,38 @@ export default function BentoOverviewDashboard({
       ? olts
       : devices;
 
-  const barItems = Array.from({ length: 12 }, (_, idx) => {
-    const dev = barSourceDevices[idx % Math.max(barSourceDevices.length, 1)];
-    const monthLabels = [
-      "CR1",
-      "CR2",
-      "CR3",
-      "SW1",
-      "SW2",
-      "SW3",
-      "ZTE",
-      "HUA",
-      "FHM",
-      "HSG",
-      "IXP",
-      "CDN",
-    ];
-    const wave = Math.sin(idx * 0.7) * 0.15 + 0.88;
-    const gbps = dev
-      ? Number(((dev.totalRxMbps / 1000) * wave).toFixed(1))
-      : Number((2.2 + (idx % 5) * 0.9).toFixed(1));
-    const isHighlighted = idx === 5 || idx === 6 || idx === 7;
+  const barItems = barSourceDevices.slice(0, 12).map((dev, idx) => {
+    const gbps = Number((dev.totalRxMbps / 1000).toFixed(2));
+    const isHighlighted = dev.id === selectedDeviceId || (selectedDeviceId === null && idx === 0);
     return {
       idx,
-      label: dev
-        ? dev.name.split("-").slice(-1)[0].slice(0, 4).toUpperCase()
-        : monthLabels[idx],
+      label: dev.name.split("-").slice(-1)[0].slice(0, 5).toUpperCase(),
       gbps,
       isHighlighted,
-      deviceId: dev?.id || devices[0]?.id,
-      fullName: dev?.name || monthLabels[idx],
+      deviceId: dev.id,
+      fullName: dev.name,
     };
   });
 
-  const maxBarGbps = Math.max(10, ...barItems.map((b) => b.gbps * 1.15));
+  const maxBarGbps = Math.max(1, ...barItems.map((b) => b.gbps * 1.15));
 
-  // Vendor Traffic Share for Right Bottom Donut
-  const vendorStats = [
-    {
-      name: "Juniper MX",
-      color: "#0ea5e9",
-      pct: 28,
-      traffic: "9.42G",
-    },
-    {
-      name: "MikroTik CCR",
-      color: "#22d3ee",
-      pct: 24,
-      traffic: "6.84G",
-    },
-    {
-      name: "Cisco Nexus/ASR",
-      color: "#38bdf8",
-      pct: 18,
-      traffic: "4.28G",
-    },
-    {
-      name: "ZTE OLT C320",
-      color: "#0284c7",
-      pct: 12,
-      traffic: "2.41G",
-    },
-    {
-      name: "Huawei MA5800",
-      color: "#1e3a8a",
-      pct: 10,
-      traffic: "1.87G",
-    },
-    {
-      name: "FiberHome & HSGQ",
-      color: "#64748b",
-      pct: 8,
-      traffic: "1.42G",
-    },
-  ];
+  // Vendor Traffic Share for Right Bottom Donut (computed from live devices)
+  const vendorColors = ["#0ea5e9", "#22d3ee", "#38bdf8", "#0284c7", "#64748b"];
+  const vendorTotals = new Map<string, number>();
+  for (const d of devices) {
+    const bw = d.totalRxMbps + d.totalTxMbps;
+    vendorTotals.set(d.vendor, (vendorTotals.get(d.vendor) || 0) + bw);
+  }
+  const totalVendorBw = Array.from(vendorTotals.values()).reduce((a, b) => a + b, 0);
+  const vendorStats = Array.from(vendorTotals.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, mbps], i) => ({
+      name,
+      color: vendorColors[i % vendorColors.length],
+      pct: totalVendorBw > 0 ? Math.round((mbps / totalVendorBw) * 100) : 0,
+      traffic: `${(mbps / 1000).toFixed(2)}G`,
+    }));
 
   const activeIncidents = incidents.filter((i) => !i.resolved);
 
@@ -340,10 +303,10 @@ export default function BentoOverviewDashboard({
 
             <div className="flex items-center justify-between text-[11px] pt-1">
               <span className="text-sky-200/80">
-                Actual Change{" "}
-                <strong className="text-cyan-300 font-mono">+2.4G</strong>
+                Core RX{" "}
+                <strong className="text-cyan-300 font-mono">{coreRxGbps}G</strong>
               </span>
-              <span className="text-emerald-300 font-mono">SLA 99.98%</span>
+              <span className="text-emerald-300 font-mono">SLA {slaPct}%</span>
             </div>
           </div>
 
@@ -368,32 +331,37 @@ export default function BentoOverviewDashboard({
             </div>
 
             <div className="space-y-2.5">
-              {[
-                {
-                  label: "Core Router",
-                  val: `${coreRxGbps}G / 20G`,
-                  pct: 97,
-                  icon: Router,
-                },
-                {
-                  label: "Dist Switch",
-                  val: `${switches.length} / ${switches.length} Active`,
-                  pct: 92,
-                  icon: Layers,
-                },
-                {
-                  label: "OLT PON",
-                  val: `${onlineOnu} / ${totalOnu} ONT`,
-                  pct: onuOnlinePct,
-                  icon: Radio,
-                },
-                {
-                  label: "BGP Peers",
-                  val: `${bgpPeers.length} / ${bgpPeers.length} Up`,
-                  pct: 100,
-                  icon: Globe,
-                },
-              ].map((g) => {
+              {(() => {
+                const coreOnline = coreRouters.filter((d) => d.status !== "offline").length;
+                const swOnline = switches.filter((d) => d.status !== "offline").length;
+                const bgpUp = bgpPeers.filter((p) => p.state === "Established").length;
+                return [
+                  {
+                    label: "Core Router",
+                    val: `${coreOnline} / ${coreRouters.length} (${coreRxGbps}G)`,
+                    pct: coreRouters.length > 0 ? Math.round((coreOnline / coreRouters.length) * 100) : 0,
+                    icon: Router,
+                  },
+                  {
+                    label: "Dist Switch",
+                    val: `${swOnline} / ${switches.length} Active`,
+                    pct: switches.length > 0 ? Math.round((swOnline / switches.length) * 100) : 0,
+                    icon: Layers,
+                  },
+                  {
+                    label: "OLT PON",
+                    val: `${onlineOnu} / ${totalOnu} ONT`,
+                    pct: onuOnlinePct,
+                    icon: Radio,
+                  },
+                  {
+                    label: "BGP Peers",
+                    val: `${bgpUp} / ${bgpPeers.length} Up`,
+                    pct: bgpPeers.length > 0 ? Math.round((bgpUp / bgpPeers.length) * 100) : 0,
+                    icon: Globe,
+                  },
+                ];
+              })().map((g) => {
                 const Icon = g.icon;
                 return (
                   <div key={g.label} className="flex items-center gap-2.5">
@@ -642,19 +610,19 @@ export default function BentoOverviewDashboard({
                       },
                       {
                         label: "High Atten",
-                        pct: "3%",
+                        pct: `${totalOnu > 0 ? Math.round((highAttenOnu / totalOnu) * 100) : 0}%`,
                         val: `${highAttenOnu} ONU`,
                         dot: "bg-sky-400",
                       },
                       {
                         label: "DyingGasp",
-                        pct: "2%",
+                        pct: `${totalOnu > 0 ? Math.round((dyingGaspOnu / totalOnu) * 100) : 0}%`,
                         val: `${dyingGaspOnu} ONU`,
                         dot: "bg-amber-400",
                       },
                       {
                         label: "LOS (Putus)",
-                        pct: "2%",
+                        pct: `${totalOnu > 0 ? Math.round((losOnu / totalOnu) * 100) : 0}%`,
                         val: `${losOnu} ONU`,
                         dot: "bg-rose-500",
                       },
@@ -761,9 +729,19 @@ export default function BentoOverviewDashboard({
                   );
                 })}
 
-                {/* Data Polygon */}
+                {/* Data Polygon (computed from live telemetry) */}
                 {(() => {
-                  const scores = [0.92, 0.86, 0.95, 0.78, 0.88];
+                  const bgpUp = bgpPeers.filter((p) => p.state === "Established").length;
+                  const bgpScore = bgpPeers.length > 0 ? bgpUp / bgpPeers.length : devices.length > 0 ? 0.5 : 0;
+                  const ponScore = totalOnu > 0 ? onlineOnu / totalOnu : devices.length > 0 ? 0.5 : 0;
+                  const cpuScore = devices.length > 0 ? Math.max(0.1, 1 - avgCpuLoad / 100) : 0;
+                  const avgLat =
+                    devices.length > 0
+                      ? devices.reduce((a, d) => a + d.latencyMs, 0) / devices.length
+                      : 0;
+                  const latScore = devices.length > 0 ? Math.max(0.1, 1 - Math.min(avgLat, 100) / 100) : 0;
+                  const upScore = devices.length > 0 ? onlineDeviceCount / devices.length : 0;
+                  const scores = [bgpScore, ponScore, cpuScore, latScore, upScore];
                   const coords = scores.map((s, i) => {
                     const angle = ((i * 72 - 90) * Math.PI) / 180;
                     const r = s * 60;
@@ -866,38 +844,31 @@ export default function BentoOverviewDashboard({
                     cy="18"
                     r="13.5"
                     fill="none"
-                    stroke="#1e3a8a"
+                    stroke={isLightCard ? "#e2e8f0" : "#1e293b"}
                     strokeWidth="5.2"
                   />
-                  <circle
-                    cx="18"
-                    cy="18"
-                    r="13.5"
-                    fill="none"
-                    stroke="#0284c7"
-                    strokeWidth="5.2"
-                    strokeDasharray="58 85"
-                  />
-                  <circle
-                    cx="18"
-                    cy="18"
-                    r="13.5"
-                    fill="none"
-                    stroke="#22d3ee"
-                    strokeWidth="5.2"
-                    strokeDasharray="34 85"
-                    strokeDashoffset="-18"
-                  />
-                  <circle
-                    cx="18"
-                    cy="18"
-                    r="13.5"
-                    fill="none"
-                    stroke="#94a3b8"
-                    strokeWidth="5.2"
-                    strokeDasharray="16 85"
-                    strokeDashoffset="-52"
-                  />
+                  {(() => {
+                    const circumference = 2 * Math.PI * 13.5;
+                    let offset = 0;
+                    return vendorStats.map((v) => {
+                      const segLen = (v.pct / 100) * circumference;
+                      const currentOffset = -offset;
+                      offset += segLen;
+                      return (
+                        <circle
+                          key={v.name}
+                          cx="18"
+                          cy="18"
+                          r="13.5"
+                          fill="none"
+                          stroke={v.color}
+                          strokeWidth="5.2"
+                          strokeDasharray={`${segLen.toFixed(2)} ${circumference.toFixed(2)}`}
+                          strokeDashoffset={currentOffset.toFixed(2)}
+                        />
+                      );
+                    });
+                  })()}
                 </svg>
                 <div className="absolute text-center">
                   <span
@@ -911,24 +882,30 @@ export default function BentoOverviewDashboard({
             </div>
 
             <div className="space-y-1.5 text-[11px]">
-              {vendorStats.map((v) => (
-                <div
-                  key={v.name}
-                  className="flex items-center justify-between"
-                >
-                  <span className="flex items-center gap-2">
-                    <span
-                      className="w-2 h-2 rounded-full"
-                      style={{ backgroundColor: v.color }}
-                    />
-                    <span className={mutedText}>{v.name}</span>
-                  </span>
-                  <span className={`font-mono ${mutedText}`}>{v.pct}%</span>
-                  <span className={`font-mono font-semibold ${headingText}`}>
-                    {v.traffic}
-                  </span>
-                </div>
-              ))}
+              {vendorStats.length === 0 ? (
+                <p className={`text-center text-xs py-2 ${mutedText}`}>
+                  Belum ada perangkat terdaftar.
+                </p>
+              ) : (
+                vendorStats.map((v) => (
+                  <div
+                    key={v.name}
+                    className="flex items-center justify-between"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span
+                        className="w-2 h-2 rounded-full"
+                        style={{ backgroundColor: v.color }}
+                      />
+                      <span className={mutedText}>{v.name}</span>
+                    </span>
+                    <span className={`font-mono ${mutedText}`}>{v.pct}%</span>
+                    <span className={`font-mono font-semibold ${headingText}`}>
+                      {v.traffic}
+                    </span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -984,7 +961,7 @@ export default function BentoOverviewDashboard({
               </button>
 
               <span className="font-mono text-xs text-sky-400">
-                {((totalTxMbps || 1900) / 1000).toFixed(2)} Gbps
+                {(totalTxMbps / 1000).toFixed(2)} Gbps
               </span>
 
               <button
@@ -1047,46 +1024,72 @@ export default function BentoOverviewDashboard({
                 />
               ))}
 
-              {showRxCurve && (
-                <>
-                  <path
-                    d="M 15 72 Q 95 55, 175 64 T 290 36 T 420 44 T 525 58 L 525 96 L 15 96 Z"
-                    fill="url(#cmpWave)"
-                  />
-                  <path
-                    d="M 15 72 Q 95 55, 175 64 T 290 36 T 420 44 T 525 58"
-                    fill="none"
-                    stroke="#22d3ee"
-                    strokeWidth="2.4"
-                  />
-                </>
-              )}
+              {(() => {
+                const pts = trafficHistory.slice(-14);
+                if (pts.length < 2) {
+                  return (
+                    <line
+                      x1="15"
+                      y1="92"
+                      x2="525"
+                      y2="92"
+                      stroke="rgba(34, 211, 238, 0.35)"
+                      strokeWidth="2"
+                      strokeDasharray="4 4"
+                    />
+                  );
+                }
+                const maxVal = Math.max(
+                  0.5,
+                  ...pts.map((p) => Math.max(p.totalDownloadGbps, p.totalUploadGbps))
+                );
+                const toCoords = (vals: number[]) =>
+                  vals.map((v, idx) => {
+                    const x = 15 + (idx / Math.max(pts.length - 1, 1)) * 510;
+                    const y = 92 - Math.min(74, (v / maxVal) * 70);
+                    return { x: Number(x.toFixed(1)), y: Number(y.toFixed(1)) };
+                  });
+                const rxCoords = toCoords(pts.map((p) => p.totalDownloadGbps));
+                const txCoords = toCoords(pts.map((p) => p.totalUploadGbps));
+                const rxLine = rxCoords.map((c) => `${c.x},${c.y}`).join(" ");
+                const txLine = txCoords.map((c) => `${c.x},${c.y}`).join(" ");
+                const rxArea = `15,96 ${rxLine} 525,96`;
 
-              {showTxCurve && (
-                <path
-                  d="M 15 80 Q 110 74, 190 48 T 290 50 T 410 32 T 525 46"
-                  fill="none"
-                  stroke="#38bdf8"
-                  strokeWidth="2"
-                />
-              )}
-
-              {/* Highlighted point markers */}
-              {[
-                { x: 245, y: 42 },
-                { x: 290, y: 36 },
-                { x: 335, y: 41 },
-              ].map((pt, i) => (
-                <circle
-                  key={i}
-                  cx={pt.x}
-                  cy={pt.y}
-                  r="4"
-                  fill="#082f49"
-                  stroke="#22d3ee"
-                  strokeWidth="2"
-                />
-              ))}
+                return (
+                  <>
+                    {showRxCurve && (
+                      <>
+                        <polygon points={rxArea} fill="url(#cmpWave)" />
+                        <polyline
+                          points={rxLine}
+                          fill="none"
+                          stroke="#22d3ee"
+                          strokeWidth="2.4"
+                        />
+                      </>
+                    )}
+                    {showTxCurve && (
+                      <polyline
+                        points={txLine}
+                        fill="none"
+                        stroke="#38bdf8"
+                        strokeWidth="2"
+                      />
+                    )}
+                    {rxCoords.slice(-3).map((pt, i) => (
+                      <circle
+                        key={i}
+                        cx={pt.x}
+                        cy={pt.y}
+                        r="4"
+                        fill="#082f49"
+                        stroke="#22d3ee"
+                        strokeWidth="2"
+                      />
+                    ))}
+                  </>
+                );
+              })()}
 
               {/* X-Axis Labels with 3 Highlighted Cyan Pills */}
               {[
@@ -1192,8 +1195,8 @@ export default function BentoOverviewDashboard({
               const rxMbps = t.list.reduce((a, d) => a + d.totalRxMbps, 0);
               const txMbps = t.list.reduce((a, d) => a + d.totalTxMbps, 0);
               const capMbps = Math.max(t.capGbps * 1000, rxMbps, txMbps, 1000);
-              const h1 = Math.max(18, Math.min(100, Math.round((rxMbps / capMbps) * 100)));
-              const h2 = Math.max(18, Math.min(100, Math.round((txMbps / capMbps) * 100)));
+              const h1 = rxMbps > 0 ? Math.max(8, Math.min(100, Math.round((rxMbps / capMbps) * 100))) : 0;
+              const h2 = txMbps > 0 ? Math.max(8, Math.min(100, Math.round((txMbps / capMbps) * 100))) : 0;
               const totalG = ((rxMbps + txMbps) / 1000).toFixed(1);
               return {
                 label: t.label,

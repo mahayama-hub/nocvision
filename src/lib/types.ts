@@ -305,6 +305,8 @@ export interface AlertingConfig {
   notifyOnOffline: boolean;
   notifyOnWarning: boolean;
   notifyOnRecovery: boolean;
+  notifyOnCyberThreat: boolean;
+  notifyOnAuthActivity: boolean;
   updatedAt?: string;
 }
 
@@ -323,7 +325,37 @@ export interface AlertingConfigPublic {
   notifyOnOffline: boolean;
   notifyOnWarning: boolean;
   notifyOnRecovery: boolean;
+  notifyOnCyberThreat: boolean;
+  notifyOnAuthActivity: boolean;
   updatedAt?: string;
+}
+
+export interface AuthAccessLog {
+  id: string;
+  timestamp: string;
+  username: string;
+  role?: string;
+  sourceIp: string;
+  userAgent: string;
+  outcome: "success" | "failed" | "blocked_bruteforce";
+  reason: string;
+}
+
+export interface CyberThreatEvent {
+  id: string;
+  timestamp: string;
+  severity: "critical" | "high" | "medium";
+  category:
+    | "brute_force"
+    | "forged_session"
+    | "ddos_spike"
+    | "bgp_hijack_flap"
+    | "rbac_escalation";
+  sourceIp: string;
+  target: string;
+  summary: string;
+  mitigationAction: string;
+  status: "active" | "mitigated";
 }
 
 export interface AlertDeliveryLog {

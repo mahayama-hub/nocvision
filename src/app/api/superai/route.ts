@@ -185,9 +185,10 @@ export async function POST(req: NextRequest) {
             systemInstruction: { parts: [{ text: systemInstruction }] },
             contents: geminiContents,
             generationConfig: {
-              temperature: 0.35,
-              maxOutputTokens: 1600,
+              temperature: 0.3,
+              maxOutputTokens: 4096,
               responseMimeType: "application/json",
+              thinkingConfig: { thinkingBudget: 0 },
             },
           }),
         }
@@ -224,12 +225,24 @@ export async function POST(req: NextRequest) {
         suggestedTab?: string | null;
       } = {};
 
+      const cleanedRaw = rawText
+        .trim()
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/i, "");
+
       try {
-        parsed = JSON.parse(rawText);
+        parsed = JSON.parse(cleanedRaw);
       } catch {
+        // Recover partial JSON fields cleanly so raw JSON braces never leak into chat UI
+        const titleMatch = cleanedRaw.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+        const contentMatch = cleanedRaw.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)/);
+        const unescapeJsonStr = (s: string) =>
+          s.replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
         parsed = {
-          title: `Gemini AI Diagnostic (${creds.model})`,
-          content: rawText || "Respons diterima dari Gemini AI.",
+          title: titleMatch ? unescapeJsonStr(titleMatch[1]) : `NOCAI Diagnostic (${creds.model})`,
+          content: contentMatch
+            ? unescapeJsonStr(contentMatch[1])
+            : cleanedRaw || "Respons diterima dari NOCAI.",
         };
       }
 

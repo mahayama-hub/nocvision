@@ -57,7 +57,7 @@ export default function AddDeviceModal({
   const [sshPort, setSshPort] = useState(22);
   const [pollingMode, setPollingMode] = useState<
     "hybrid" | "live_icmp_tcp" | "simulation"
-  >("hybrid");
+  >("live_icmp_tcp");
   const [testNow, setTestNow] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 

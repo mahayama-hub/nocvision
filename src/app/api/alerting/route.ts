@@ -4,6 +4,7 @@ import { loadNocState, saveNocState } from "@/lib/noc-store";
 import {
   DEFAULT_ALERTING_CONFIG,
   getDefaultWhatsAppUrl,
+  reportCyberThreat,
   sendTelegramBotMessage,
   sendWhatsAppBotMessage,
   toPublicAlertingConfig,
@@ -20,6 +21,8 @@ export async function GET(req: NextRequest) {
     ok: true,
     config: toPublicAlertingConfig(state.alertingConfig),
     logs: state.alertLogs || [],
+    cyberThreats: state.cyberThreats || [],
+    authAccessLogs: state.authAccessLogs || [],
   });
 }
 
@@ -99,6 +102,14 @@ export async function POST(req: NextRequest) {
           body.notifyOnRecovery !== undefined
             ? Boolean(body.notifyOnRecovery)
             : prev.notifyOnRecovery,
+        notifyOnCyberThreat:
+          body.notifyOnCyberThreat !== undefined
+            ? Boolean(body.notifyOnCyberThreat)
+            : prev.notifyOnCyberThreat,
+        notifyOnAuthActivity:
+          body.notifyOnAuthActivity !== undefined
+            ? Boolean(body.notifyOnAuthActivity)
+            : prev.notifyOnAuthActivity,
         updatedAt: new Date().toISOString(),
       };
 
@@ -218,6 +229,51 @@ export async function POST(req: NextRequest) {
       state.alertLogs = [];
       saveNocState(state);
       return NextResponse.json({ ok: true, logs: [] });
+    }
+
+    if (action === "mitigate_threat") {
+      const threatId = String(body.threatId || "");
+      const target = (state.cyberThreats || []).find((t) => t.id === threatId);
+      if (!target) {
+        return NextResponse.json({ ok: false, error: "Event ancaman tidak ditemukan." }, { status: 404 });
+      }
+      target.status = "mitigated";
+      saveNocState(state);
+      return NextResponse.json({
+        ok: true,
+        cyberThreats: state.cyberThreats || [],
+      });
+    }
+
+    if (action === "clear_threats") {
+      state.cyberThreats = [];
+      saveNocState(state);
+      return NextResponse.json({ ok: true, cyberThreats: [] });
+    }
+
+    if (action === "clear_auth_logs") {
+      state.authAccessLogs = [];
+      saveNocState(state);
+      return NextResponse.json({ ok: true, authAccessLogs: [] });
+    }
+
+    if (action === "test_cyber_alert") {
+      const ev = await reportCyberThreat({
+        severity: "high",
+        category: "ddos_spike",
+        sourceIp: "203.0.113.99",
+        target: "Core Edge Gateway",
+        summary: "Simulasi uji deteksi DDoS / SYN Flood untuk verifikasi Defensive Security Alerting.",
+        mitigationAction: "Aktifkan SYN-Flood Drop & RTBH Blackhole pada BGP Upstream.",
+        triggeredBy: auth.user.fullName,
+      });
+      const updated = loadNocState();
+      return NextResponse.json({
+        ok: true,
+        event: ev,
+        logs: updated.alertLogs || [],
+        cyberThreats: updated.cyberThreats || [],
+      });
     }
 
     return NextResponse.json({ ok: false, error: "Aksi tidak dikenal." }, { status: 400 });

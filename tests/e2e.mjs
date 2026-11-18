@@ -390,6 +390,51 @@ test("5. Admin CRUD, diagnostics, NOCAI status, user secret redaction, and logou
   assert.equal("telegramBotToken" in alertSaveJson.config, false);
   assert.equal("whatsappToken" in alertSaveJson.config, false);
 
+  // Disable test bot channels before running cyber alert simulation so no external network calls block E2E
+  await fetch(`${BASE_URL}/api/alerting`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: superadmin.cookie },
+    body: JSON.stringify({
+      action: "save_config",
+      telegramEnabled: false,
+      whatsappEnabled: false,
+      clearTelegramToken: true,
+      clearWhatsappToken: true,
+    }),
+  });
+
+  // Cyber threat test + mitigate_threat + authAccessLogs verification
+  const cyberRes = await fetch(`${BASE_URL}/api/alerting`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: superadmin.cookie },
+    body: JSON.stringify({ action: "test_cyber_alert" }),
+  });
+  assert.equal(cyberRes.status, 200);
+  const cyberJson = await cyberRes.json();
+  assert.equal(cyberJson.ok, true);
+  assert.ok(Array.isArray(cyberJson.cyberThreats) && cyberJson.cyberThreats.length >= 1);
+
+  const mitigateRes = await fetch(`${BASE_URL}/api/alerting`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: superadmin.cookie },
+    body: JSON.stringify({
+      action: "mitigate_threat",
+      threatId: cyberJson.cyberThreats[0].id,
+    }),
+  });
+  assert.equal(mitigateRes.status, 200);
+  const mitigateJson = await mitigateRes.json();
+  assert.equal(mitigateJson.cyberThreats[0].status, "mitigated");
+
+  const alertGetRes = await fetch(`${BASE_URL}/api/alerting`, {
+    headers: { Cookie: superadmin.cookie },
+  });
+  assert.equal(alertGetRes.status, 200);
+  const alertGetJson = await alertGetRes.json();
+  assert.ok(Array.isArray(alertGetJson.authAccessLogs) && alertGetJson.authAccessLogs.length >= 2);
+  assert.ok(alertGetJson.authAccessLogs.some((l) => l.outcome === "success" && l.username === "superadmin"));
+  assert.ok(alertGetJson.authAccessLogs.some((l) => l.outcome === "failed"));
+
   // Diagnostics ping loopback check
   const pingRes = await fetch(`${BASE_URL}/api/diagnostics`, {
     method: "POST",
